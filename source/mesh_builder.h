@@ -158,11 +158,11 @@ public:
     // Apply the edge loop cut to the retopo mesh, splitting quads and inserting new vertices
     Bool ApplyEdgeLoopCut(PolygonObject* retopo, const EdgeCutResult& cutResult);
 
-    // Check if a screen position is near the outer boundary of the retopo mesh
-    Bool IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius);
+    // Check if a screen position is near the outer boundary of the retopo mesh (visible front-facing geometry)
+    Bool IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, PolygonObject* target = nullptr, SurfaceSnapper* snapper = nullptr, Bool visibleOnly = true);
 
     // Relax vertices within brush radius in screen space (Laplacian smoothing constrained to target surface)
-    Bool RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder = false, Bool lockInterior = false);
+    Bool RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder = false, Bool lockInterior = false, Bool visibleOnly = true);
 
     // Topological edge and neighbor cache
     struct EdgeCacheEntry

@@ -1,0 +1,27 @@
+STRINGTABLE toolquaddraw
+{
+    toolquaddraw                    "QuadDraw Retopo Tool";
+
+    QUADDRAW_GROUP_DISPLAY          "Отображение";
+    QUADDRAW_MESH_COLOR             "Цвет полигонов";
+    QUADDRAW_FACE_OPACITY           "Непрозрачность полигонов";
+    QUADDRAW_WIRE_COLOR             "Цвет сетки";
+    QUADDRAW_LINE_WIDTH             "Толщина линий";
+    QUADDRAW_POINT_SIZE             "Размер точек";
+
+    QUADDRAW_GROUP_INTERACTIVE      "Интерактивные настройки";
+    QUADDRAW_PREVIEW_COLOR          "Цвет превью квада (Shift)";
+    QUADDRAW_CUT_COLOR              "Цвет разреза петли (Ctrl)";
+    QUADDRAW_HIGHLIGHT_COLOR        "Цвет подсветки при наведении";
+    QUADDRAW_HOVER_LINE_WIDTH       "Толщина подсветки";
+
+    QUADDRAW_GROUP_RELAX            "Кисть Relax (Shift+LMB Drag)";
+    QUADDRAW_RELAX_MODE             "Режим Relax";
+    QUADDRAW_RELAX_MODE_AUTOLOCK    "Авто-блокировка";
+    QUADDRAW_RELAX_MODE_INTERIOR    "Внутренние вершины";
+    QUADDRAW_RELAX_MODE_BORDER      "Граничные вершины";
+    QUADDRAW_RELAX_MODE_ALL         "Все вершины";
+    QUADDRAW_RELAX_VISIBLE_ONLY     "Только видимые";
+    QUADDRAW_RELAX_RADIUS           "Радиус кисти (px)";
+    QUADDRAW_RELAX_STRENGTH         "Сила сглаживания";
+}

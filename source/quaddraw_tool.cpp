@@ -97,6 +97,8 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
             data.SetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
         if (data.FindIndex(QUADDRAW_RELAX_STRENGTH) == NOTOK)
             data.SetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+        if (data.FindIndex(QUADDRAW_RELAX_VISIBLE_ONLY) == NOTOK)
+            data.SetBool(QUADDRAW_RELAX_VISIBLE_ONLY, true);
     }
 
     return true;
@@ -122,6 +124,7 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     data.SetInt32(QUADDRAW_RELAX_MODE, QUADDRAW_RELAX_MODE_AUTOLOCK);
     data.SetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
     data.SetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+    data.SetBool(QUADDRAW_RELAX_VISIBLE_ONLY, true);
 
     DescriptionToolData::InitDefaultSettings(doc, data);
     data.SetBool(MDATA_INTERACTIVE, false);
@@ -1135,6 +1138,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
         Float strength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
         Int32 relaxMode = data.GetInt32(QUADDRAW_RELAX_MODE, QUADDRAW_RELAX_MODE_AUTOLOCK);
+        Bool visibleOnly = data.GetBool(QUADDRAW_RELAX_VISIBLE_ONLY, true);
 
         Bool lockBorder = false;
         Bool lockInterior = false;
@@ -1159,7 +1163,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             // Auto-lock logic (Maya):
             // If stroke starts on/near border -> relax border, lock interior.
             // If stroke starts on interior -> relax interior, lock border.
-            Bool startOnBorder = m_builder.IsCursorNearBorder(retopo, bd, mx, my, brushRadius);
+            Bool startOnBorder = m_builder.IsCursorNearBorder(retopo, bd, mx, my, brushRadius, target, &m_snapper, visibleOnly);
             if (startOnBorder)
             {
                 lockBorder = false;
@@ -1182,7 +1186,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_cursorY = my;
 
         // Perform initial relaxation step at click position
-        m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior);
+        m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
 
         BaseContainer device;
@@ -1197,7 +1201,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             m_cursorX = mx;
             m_cursorY = my;
 
-            m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior);
+            m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly);
 
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         }

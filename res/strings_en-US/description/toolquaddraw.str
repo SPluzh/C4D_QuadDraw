@@ -21,6 +21,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_RELAX_MODE_INTERIOR    "Interior Vertices";
     QUADDRAW_RELAX_MODE_BORDER      "Border Vertices";
     QUADDRAW_RELAX_MODE_ALL         "All Vertices";
+    QUADDRAW_RELAX_VISIBLE_ONLY     "Visible Only";
     QUADDRAW_RELAX_RADIUS           "Relax Radius (px)";
     QUADDRAW_RELAX_STRENGTH         "Relax Strength";
 }
