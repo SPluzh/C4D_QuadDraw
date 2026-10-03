@@ -3,6 +3,7 @@ STRINGTABLE toolquaddraw
     toolquaddraw                    "QuadDraw Retopo Tool";
 
     QUADDRAW_GROUP_DISPLAY          "Отображение";
+    QUADDRAW_DISABLE_CUSTOM_SHADING "Отключить кастомный шейдинг";
     QUADDRAW_MESH_COLOR             "Цвет полигонов";
     QUADDRAW_FACE_OPACITY           "Непрозрачность полигонов";
     QUADDRAW_WIRE_COLOR             "Цвет сетки";

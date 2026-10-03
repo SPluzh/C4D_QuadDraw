@@ -58,6 +58,8 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
     else
     {
         // Ensure all settings (including newly added ones) are initialized
+        if (data.FindIndex(QUADDRAW_DISABLE_CUSTOM_SHADING) == NOTOK)
+            data.SetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
         if (data.FindIndex(QUADDRAW_FACE_OPACITY) == NOTOK)
             data.SetFloat(QUADDRAW_FACE_OPACITY, 0.35);
         if (data.FindIndex(QUADDRAW_WIRE_COLOR) == NOTOK)
@@ -110,6 +112,7 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     const Vector defaultWireColor(0.0, 0.0, 0.0);           // Black
     const Vector defaultHighlightColor(1.0, 1.0, 1.0);      // White
 
+    data.SetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
     data.SetVector(QUADDRAW_MESH_COLOR, defaultFaceColor);
     data.SetFloat(QUADDRAW_FACE_OPACITY, 0.35); // 35% opacity
     data.SetVector(QUADDRAW_WIRE_COLOR, defaultWireColor);
@@ -175,6 +178,17 @@ Bool QuadDrawToolData::GetDDescription(const BaseDocument* doc, const BaseContai
     }
 
     return false;
+}
+
+Bool QuadDrawToolData::GetDEnabling(const BaseDocument* doc, const BaseContainer& data, const DescID& id, const GeData& t_data, DESCFLAGS_ENABLE flags, const BaseContainer* itemdesc) const
+{
+    Int32 paramId = (Int32)id[0].id;
+    if (paramId == QUADDRAW_MESH_COLOR || paramId == QUADDRAW_FACE_OPACITY)
+    {
+        Bool disabled = data.GetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
+        return !disabled;
+    }
+    return DescriptionToolData::GetDEnabling(doc, data, id, t_data, flags, itemdesc);
 }
 
 Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 type, void* t_data)
@@ -2019,6 +2033,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     const Vector defaultWireColor(0.0, 0.0, 0.0);           // Black
     const Vector defaultHighlightColor(1.0, 1.0, 1.0);      // White
 
+    Bool disableCustomShading = data.GetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
     Vector faceColor = data.GetVector(QUADDRAW_MESH_COLOR, defaultFaceColor);
     Float faceOpacity = data.GetFloat(QUADDRAW_FACE_OPACITY, 0.35);
     if (faceOpacity > 1.0) faceOpacity /= 100.0;
@@ -2118,23 +2133,26 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
         Vector faceColors[4] = { faceColor, faceColor, faceColor, faceColor };
 
-        // Draw translucent faces so underlying target mesh remains visible
-        bd->SetTransparency(transVal);
-        for (Int32 i = 0; i < polyCount; ++i)
+        // Draw translucent faces so underlying target mesh remains visible (if custom mesh shading is not disabled)
+        if (!disableCustomShading)
         {
-            const CPolygon& p = polys[i];
-            Bool isQuad = (p.c != p.d);
+            bd->SetTransparency(transVal);
+            for (Int32 i = 0; i < polyCount; ++i)
+            {
+                const CPolygon& p = polys[i];
+                Bool isQuad = (p.c != p.d);
 
-            Vector qPts[4] = {
-                rMg * pts[p.a],
-                rMg * pts[p.b],
-                rMg * pts[p.c],
-                rMg * pts[p.d]
-            };
+                Vector qPts[4] = {
+                    rMg * pts[p.a],
+                    rMg * pts[p.b],
+                    rMg * pts[p.c],
+                    rMg * pts[p.d]
+                };
 
-            bd->DrawPolygon(qPts, faceColors, isQuad);
+                bd->DrawPolygon(qPts, faceColors, isQuad);
+            }
+            bd->DrawArrayEnd();
         }
-        bd->DrawArrayEnd();
 
         // Draw wireframe lines in user-configured wire color and thickness
         bd->SetTransparency(0);

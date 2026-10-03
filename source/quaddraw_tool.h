@@ -27,6 +27,7 @@ public:
     virtual void FreeTool(BaseDocument* doc, BaseContainer& data) override;
     virtual void InitDefaultSettings(BaseDocument* doc, BaseContainer& data) override;
     virtual Bool GetDDescription(const BaseDocument* doc, const BaseContainer& data, Description* description, DESCFLAGS_DESC& flags) const override;
+    virtual Bool GetDEnabling(const BaseDocument* doc, const BaseContainer& data, const DescID& id, const GeData& t_data, DESCFLAGS_ENABLE flags, const BaseContainer* itemdesc) const override;
     virtual Bool Message(BaseDocument* doc, BaseContainer& data, Int32 type, void* t_data) override;
 
 private:

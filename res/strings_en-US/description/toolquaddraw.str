@@ -3,6 +3,7 @@ STRINGTABLE toolquaddraw
     toolquaddraw                    "QuadDraw Retopo Tool";
 
     QUADDRAW_GROUP_DISPLAY          "Display Settings";
+    QUADDRAW_DISABLE_CUSTOM_SHADING "Disable Custom Mesh Shading";
     QUADDRAW_MESH_COLOR             "Face Color";
     QUADDRAW_FACE_OPACITY           "Face Opacity";
     QUADDRAW_WIRE_COLOR             "Wire Color";

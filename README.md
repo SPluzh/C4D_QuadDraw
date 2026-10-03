@@ -40,6 +40,10 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
    - **LMB Drag** on vertices, edges, or polygons moves components directly.
    - Dragging a vertex onto another merges them automatically (Weld).
 
+8. **Display Settings**:
+   - **Disable Custom Mesh Shading** (`QUADDRAW_DISABLE_CUSTOM_SHADING`): checked by default to keep clean native Cinema 4D viewport shading on the editable mesh upon tool activation. Uncheck to display translucent retopo polygon face overlays (`Face Color` & `Face Opacity`).
+   - Configurable wireframe color, line width, vertex point size, and interactive hover colors.
+
 ---
 
 ## Keyboard Shortcuts
