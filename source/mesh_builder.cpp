@@ -1330,8 +1330,133 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
     Int32 ptCount = retopo->GetPointCount();
     if (ptCount < 4) return result;
 
+    Int32 polyCount = retopo->GetPolygonCount();
+    const CPolygon* polys = retopo->GetPolygonR();
     const Vector* pts = retopo->GetPointR();
     Matrix mg = retopo->GetMg();
+
+    Vector camPos = bd->GetMg().off;
+    Bool isOrtho = (bd->GetProjection() != Pperspective);
+    Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
+
+    // 1. Identify which existing polygons are front-facing and on the front surface
+    maxon::BaseArray<Bool> isFrontPoly;
+    isFrontPoly.Resize(polyCount) iferr_ignore("Resize isFrontPoly");
+
+    for (Int32 p = 0; p < polyCount; ++p)
+    {
+        const CPolygon& poly = polys[p];
+        Vector wa = mg * pts[poly.a];
+        Vector wb = mg * pts[poly.b];
+        Vector wc = mg * pts[poly.c];
+        Vector fn = Cross(wb - wa, wc - wa);
+        Vector polyCenter = (wa + wb + wc) * (1.0 / 3.0);
+        Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+
+        if (Dot(fn, toCam) <= 0.0)
+        {
+            isFrontPoly[p] = false;
+            continue;
+        }
+
+        if (targetMesh && snapper && targetMesh->GetPolygonCount() > 0)
+        {
+            Vector sCenter = bd->WS(polyCenter);
+            if (sCenter.z > 0.0)
+            {
+                SnapResult tSnap = snapper->RaycastSurface(bd, targetMesh, sCenter.x, sCenter.y);
+                if (tSnap.valid)
+                {
+                    Float tZ = bd->WS(tSnap.worldPos).z;
+                    Float tol = maxon::Max(Float(3.0), Float(tZ * 0.008));
+                    if (sCenter.z > tZ + tol)
+                    {
+                        isFrontPoly[p] = false;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        isFrontPoly[p] = true;
+    }
+
+    maxon::BaseArray<Vector> allScreenPts;
+    allScreenPts.Resize(ptCount) iferr_ignore("Resize allScreenPts");
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        allScreenPts[i] = bd->WS(mg * pts[i]);
+    }
+
+    // 2. Identify which vertices are on the front surface
+    maxon::BaseArray<Int32> vertPolyCount;
+    maxon::BaseArray<Int32> vertFrontPolyCount;
+    maxon::BaseArray<Bool> isFrontVertex;
+    vertPolyCount.Resize(ptCount) iferr_ignore("Resize vertPolyCount");
+    vertFrontPolyCount.Resize(ptCount) iferr_ignore("Resize vertFrontPolyCount");
+    isFrontVertex.Resize(ptCount) iferr_ignore("Resize isFrontVertex");
+
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        vertPolyCount[i] = 0;
+        vertFrontPolyCount[i] = 0;
+        isFrontVertex[i] = false;
+    }
+
+    for (Int32 p = 0; p < polyCount; ++p)
+    {
+        const CPolygon& poly = polys[p];
+        vertPolyCount[poly.a]++;
+        vertPolyCount[poly.b]++;
+        vertPolyCount[poly.c]++;
+        if (isFrontPoly[p])
+        {
+            vertFrontPolyCount[poly.a]++;
+            vertFrontPolyCount[poly.b]++;
+            vertFrontPolyCount[poly.c]++;
+        }
+        if (poly.c != poly.d)
+        {
+            vertPolyCount[poly.d]++;
+            if (isFrontPoly[p])
+                vertFrontPolyCount[poly.d]++;
+        }
+    }
+
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        const Vector& sPos = allScreenPts[i];
+        if (sPos.z <= 0.0)
+        {
+            isFrontVertex[i] = false;
+            continue;
+        }
+
+        if (vertPolyCount[i] > 0)
+        {
+            isFrontVertex[i] = (vertFrontPolyCount[i] > 0);
+        }
+        else
+        {
+            Vector wPos = mg * pts[i];
+            Vector toCam = isOrtho ? orthoLook : (camPos - wPos).GetNormalized();
+            Bool front = true;
+            if (targetMesh && snapper && targetMesh->GetPolygonCount() > 0)
+            {
+                SnapResult tSnap = snapper->RaycastSurface(bd, targetMesh, sPos.x, sPos.y);
+                if (tSnap.valid)
+                {
+                    Float tZ = bd->WS(tSnap.worldPos).z;
+                    Float tol = maxon::Max(Float(3.0), Float(tZ * 0.008));
+                    if (sPos.z > tZ + tol || Dot(tSnap.normal, toCam) <= 0.0)
+                    {
+                        front = false;
+                    }
+                }
+            }
+            isFrontVertex[i] = front;
+        }
+    }
 
     struct CandidatePt
     {
@@ -1342,20 +1467,15 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
     };
 
     maxon::BaseArray<CandidatePt> candidates;
-    maxon::BaseArray<Vector> allScreenPts;
-    allScreenPts.Resize(ptCount) iferr_ignore("Resize allScreenPts");
 
     const Float maxSearchRadius = 150.0;
     const Float maxRadiusSq = maxSearchRadius * maxSearchRadius;
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
-        Vector wPos = mg * pts[i];
-        Vector sPos = bd->WS(wPos);
-        allScreenPts[i] = sPos;
+        if (!isFrontVertex[i]) continue;
 
-        if (sPos.z <= 0.0) continue;
-
+        const Vector& sPos = allScreenPts[i];
         Float dx = sPos.x - screenX;
         if (std::abs(dx) > maxSearchRadius) continue;
         Float dy = sPos.y - screenY;
@@ -1364,22 +1484,9 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
         Float distSq = dx * dx + dy * dy;
         if (distSq <= maxRadiusSq)
         {
-            // If targetMesh and snapper are provided, test if vertex is occluded behind target mesh
-            if (targetMesh && snapper)
-            {
-                SnapResult tSnap = snapper->RaycastSurface(bd, targetMesh, sPos.x, sPos.y);
-                if (tSnap.valid)
-                {
-                    Float tZ = bd->WS(tSnap.worldPos).z;
-                    Float tol = maxon::Max(Float(2.5), Float(tZ * 0.005));
-                    if (sPos.z > tZ + tol)
-                        continue; // Vertex is behind the target mesh!
-                }
-            }
-
             CandidatePt cp;
             cp.index = i;
-            cp.worldPos = wPos;
+            cp.worldPos = mg * pts[i];
             cp.screenPos = sPos;
             cp.distSq = distSq;
             candidates.Append(cp) iferr_ignore("Append candidate");
@@ -1395,12 +1502,10 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
     Int32 numCand = (Int32)candidates.GetCount();
     if (numCand > 8) numCand = 8; // 8 candidates = 70 combinations max
 
-    Int32 polyCount = retopo->GetPolygonCount();
-    const CPolygon* polys = retopo->GetPolygonR();
-
     auto hasExistingPolygon4 = [&](Int32 a, Int32 b, Int32 c, Int32 d) -> Bool {
         for (Int32 p = 0; p < polyCount; ++p)
         {
+            if (!isFrontPoly[p]) continue;
             const CPolygon& poly = polys[p];
             Int32 matchCount = 0;
             if (poly.a == a || poly.a == b || poly.a == c || poly.a == d) matchCount++;
@@ -1422,6 +1527,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
     auto sharesThreeOrMoreWithExisting = [&](Int32 a, Int32 b, Int32 c, Int32 d) -> Bool {
         for (Int32 p = 0; p < polyCount; ++p)
         {
+            if (!isFrontPoly[p]) continue;
             const CPolygon& poly = polys[p];
             Int32 matchCount = 0;
             if (poly.a == a || poly.a == b || poly.a == c || poly.a == d) matchCount++;
@@ -1536,6 +1642,10 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     if (FindPolygonUnderScreen(bd, retopo, centroid.x, centroid.y, targetMesh, snapper) != NOTOK)
                         continue;
 
+                    Float maxQuadZ = std::max(std::max(quadPts[0].screenPos.z, quadPts[1].screenPos.z), std::max(quadPts[2].screenPos.z, quadPts[3].screenPos.z));
+                    Float avgQuadZ = (quadPts[0].screenPos.z + quadPts[1].screenPos.z + quadPts[2].screenPos.z + quadPts[3].screenPos.z) * 0.25;
+                    Float quadTol = maxon::Max(Float(3.0), Float(avgQuadZ * 0.01));
+
                     // Ensure no other retopo vertex is inside this quad (using precomputed allScreenPts!)
                     Bool hasOtherInside = false;
                     for (Int32 m = 0; m < ptCount; ++m)
@@ -1544,8 +1654,11 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                             m == quadPts[2].index || m == quadPts[3].index)
                             continue;
 
+                        if (!isFrontVertex[m]) continue;
+
                         const Vector& sPt = allScreenPts[m];
                         if (sPt.z <= 0.0) continue;
+                        if (sPt.z > maxQuadZ + quadTol) continue;
                         if (sPt.x < minX || sPt.x > maxX || sPt.y < minY || sPt.y > maxY) continue;
 
                         Float t0 = cross2D(quadPts[0].screenPos, quadPts[1].screenPos, sPt) * sign;
@@ -1566,6 +1679,8 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     Bool hasPolyCentroidInside = false;
                     for (Int32 p = 0; p < polyCount; ++p)
                     {
+                        if (!isFrontPoly[p]) continue;
+
                         const CPolygon& poly = polys[p];
                         const Vector& sa = allScreenPts[poly.a];
                         const Vector& sb = allScreenPts[poly.b];
@@ -1578,6 +1693,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                             if (sd.z <= 0.0) continue;
                             polyCenter = (sa + sb + sc + sd) * 0.25;
                         }
+                        if (polyCenter.z > maxQuadZ + quadTol) continue;
                         if (polyCenter.x < minX || polyCenter.x > maxX || polyCenter.y < minY || polyCenter.y > maxY)
                             continue;
 
@@ -1621,6 +1737,8 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
 
                         for (Int32 p = 0; p < polyCount; ++p)
                         {
+                            if (!isFrontPoly[p]) continue;
+
                             const CPolygon& poly = polys[p];
                             Int32 pEdges[4][2] = { {poly.a, poly.b}, {poly.b, poly.c}, {poly.c, poly.d}, {poly.d, poly.a} };
                             Int32 numPolyEdges = (poly.c != poly.d) ? 4 : 3;
@@ -1640,6 +1758,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                                 const Vector& sU = allScreenPts[pU];
                                 const Vector& sV = allScreenPts[pV];
                                 if (sU.z <= 0.0 || sV.z <= 0.0) continue;
+                                if (std::min(sU.z, sV.z) > maxQuadZ + quadTol) continue;
 
                                 Float uMinX = std::min(sU.x, sV.x);
                                 Float uMaxX = std::max(sU.x, sV.x);
