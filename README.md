@@ -26,7 +26,7 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 4. **Maya-Style Relax Brush**:
    - **Shift + LMB Drag** over faces or edges smooths topology.
    - Multiple relax modes: Auto-Lock (preserves borders or interiors depending on stroke origin), Border Only, Interior Only, or All.
-   - **Shift + MMB Drag**: interactively adjusts relax brush radius.
+   - **Shift + MMB Drag**: interactively adjusts relax brush radius (horizontal drag) and strength (vertical drag), identical to C4D_RelaxTool.
 
 5. **Edge Loop Insertion (Cut Tool)**:
    - **Ctrl + Hover**: previews edge loops across quad rings.
@@ -51,7 +51,7 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 | **Shift + Hover** | Preview prospective quad polygon |
 | **Shift + LMB** | Create quad polygon from preview |
 | **Shift + LMB Drag** | Relax topology using the relax brush |
-| **Shift + MMB Drag** | Interactively resize relax brush radius |
+| **Shift + MMB Drag** | Interactively adjust relax brush radius (horizontal) and strength (vertical) |
 | **Ctrl + Hover** | Preview edge loop cut |
 | **Ctrl + LMB / Drag** | Insert edge loop and slide |
 | **Ctrl + Shift + Hover** | Highlight vertex, edge loop, or polygon for deletion |

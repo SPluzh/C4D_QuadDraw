@@ -179,21 +179,118 @@ Bool QuadDrawToolData::GetDDescription(const BaseDocument* doc, const BaseContai
 
 Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 type, void* t_data)
 {
-    if (type == MSG_DESCRIPTION_CHECKUPDATE)
+    switch (type)
     {
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-        return true;
-    }
-    if (type == MSG_DESCRIPTION_COMMAND)
-    {
-        DescriptionCommand* dc = (DescriptionCommand*)t_data;
-        if (dc && dc->_descId[0].id == MDATA_DEFAULTVALUES)
+        case MSG_DESCRIPTION_CHECKUPDATE:
         {
-            InitDefaultSettings(doc, data);
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
         }
+
+        case MSG_DESCRIPTION_COMMAND:
+        {
+            DescriptionCommand* dc = (DescriptionCommand*)t_data;
+            if (dc && dc->_descId[0].id == MDATA_DEFAULTVALUES)
+            {
+                InitDefaultSettings(doc, data);
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+            break;
+        }
+
+        case MSG_TOOL_ASK:
+        {
+            ToolAskMsgData* ask = static_cast<ToolAskMsgData*>(t_data);
+            if (ask)
+            {
+                Bool isShift = m_shiftHeld;
+                if (ask->msg)
+                {
+                    Int32 qual = ask->msg->GetInt32(BFM_INPUT_QUALIFIER);
+                    if ((qual & QSHIFT) != 0)
+                        isShift = true;
+                }
+                BaseContainer ks;
+                if (GetInputState(BFM_INPUT_KEYBOARD, BFM_INPUT_QUALIFIER, ks))
+                {
+                    if ((ks.GetInt32(BFM_INPUT_QUALIFIER) & QSHIFT) != 0)
+                        isShift = true;
+                }
+
+                if (isShift)
+                {
+                    ask->use_middlemouse = true;
+                    ask->resize_allowed = true;
+                }
+            }
+            return true;
+        }
+
+        case MSG_TOOL_RESIZE:
+        {
+            ToolResizeData* d = static_cast<ToolResizeData*>(t_data);
+            if (!d || !d->data)
+                return false;
+
+            switch (d->pass)
+            {
+                case ToolResizeData::RESIZE_PASS_INIT:
+                {
+                    d->cross_type = true;
+                    d->falloff.show = true;
+                    d->falloff.size = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+                    d->falloff.opacity = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+                    d->falloff.color = Vector(1.0, 1.0, 1.0);
+                    d->falloff.position.off = Vector(m_cursorX, m_cursorY, 0.0);
+                    m_isResizingBrush = true;
+                    m_brushResizeCenterX = m_cursorX;
+                    m_brushResizeCenterY = m_cursorY;
+                    return true;
+                }
+
+                case ToolResizeData::RESIZE_PASS_RESIZE:
+                {
+                    if (d->horizontal)
+                    {
+                        Float radius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+                        radius += (Float)d->delta;
+                        radius = maxon::ClampValue(radius, Float(5.0), Float(500.0));
+                        data.SetFloat(QUADDRAW_RELAX_RADIUS, radius);
+                        d->falloff.size = radius;
+                        d->cursor_text = FormatString("Radius: @ px"_s, (Int32)(radius + 0.5));
+                        StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Radius: @ px"_s, (Int32)(radius + 0.5)));
+                    }
+                    else
+                    {
+                        Float strength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+                        strength += (Float)d->delta * 0.005;
+                        strength = maxon::ClampValue(strength, Float(0.01), Float(1.0));
+                        data.SetFloat(QUADDRAW_RELAX_STRENGTH, strength);
+                        d->falloff.opacity = strength;
+                        d->cursor_text = FormatString("Strength: @"_s, strength);
+                        StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Strength: @"_s, strength));
+                    }
+                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    return true;
+                }
+
+                case ToolResizeData::RESIZE_PASS_END:
+                case ToolResizeData::RESIZE_PASS_RESET:
+                {
+                    m_isResizingBrush = false;
+                    EventAdd();
+                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    return true;
+                }
+
+                default:
+                    break;
+            }
+            return true;
+        }
     }
+
     return DescriptionToolData::Message(doc, data, type, t_data);
 }
 
@@ -586,6 +683,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     if (m_shiftHeld)
     {
         Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+        Float brushStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
 
         // Check quad creation preview only if retopo has at least 4 vertices
         if (retopo && retopo->GetPointCount() >= 4)
@@ -601,15 +699,15 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         if (m_shiftQuadPreview.valid)
         {
             bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
-            StatusSetText(FormatString("QuadDraw | Shift+LMB: Create Quad! (Vertices: @, @, @, @) | Shift+MMB Drag: Resize Brush (@ px) | Target: @"_s,
-                m_shiftQuadPreview.v[0], m_shiftQuadPreview.v[1], m_shiftQuadPreview.v[2], m_shiftQuadPreview.v[3], (Int32)(brushRadius + 0.5), targetName));
+            StatusSetText(FormatString("QuadDraw | Shift+LMB: Create Quad! (Vertices: @, @, @, @) | Shift+MMB Drag: Adjust Brush (@ px, @) | Target: @"_s,
+                m_shiftQuadPreview.v[0], m_shiftQuadPreview.v[1], m_shiftQuadPreview.v[2], m_shiftQuadPreview.v[3], (Int32)(brushRadius + 0.5), brushStrength, targetName));
         }
         else
         {
             // Maya-style Relax brush (fast, responsive hover exactly like C4D_RelaxTool)
             bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-            StatusSetText(FormatString("QuadDraw [RELAX] | Shift+LMB Drag: Relax Brush (@ px) | Shift+MMB Drag: Resize Brush | Target: @"_s,
-                (Int32)(brushRadius + 0.5), targetName));
+            StatusSetText(FormatString("QuadDraw [RELAX] | Shift+LMB Drag: Relax Brush (@ px, @) | Shift+MMB Drag: Adjust Radius & Strength | Target: @"_s,
+                (Int32)(brushRadius + 0.5), brushStrength, targetName));
         }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -799,12 +897,14 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     Bool shiftPressed = ((qualifier & QSHIFT) != 0) || m_shiftHeld;
 
     // =========================================================================
-    // ACTION 0: SHIFT + MMB DRAG -> RESIZE RELAX BRUSH RADIUS (MAYA STYLE)
+    // ACTION 0: SHIFT + MMB DRAG -> RESIZE RELAX BRUSH (RADIUS & STRENGTH)
     // =========================================================================
     if (channel == BFM_INPUT_MOUSEMIDDLE && shiftPressed)
     {
         Float initialRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
         Float currentRadius = initialRadius;
+        Float initialStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+        Float currentStrength = initialStrength;
 
         m_isResizingBrush = true;
         m_brushResizeCenterX = mx;
@@ -816,20 +916,46 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         win->MouseDragStart(KEY_MMIDDLE, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
 
         Float dx, dy;
+        Float totalDx = 0.0;
+        Float totalDy = 0.0;
+        // Direction lock like cross_type: 0 = uncommitted, 1 = horizontal (radius), 2 = vertical (strength)
+        Int32 dragAxis = 0;
+
         while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
         {
             if (dx == 0.0 && dy == 0.0) continue;
 
-            currentRadius += dx;
-            if (currentRadius < 5.0) currentRadius = 5.0;
-            if (currentRadius > 300.0) currentRadius = 300.0;
+            totalDx += dx;
+            totalDy += dy;
 
-            data.SetFloat(QUADDRAW_RELAX_RADIUS, currentRadius);
+            if (dragAxis == 0)
+            {
+                if (std::abs(totalDx) >= 3.0 || std::abs(totalDy) >= 3.0)
+                {
+                    if (std::abs(totalDx) >= std::abs(totalDy))
+                        dragAxis = 1;
+                    else
+                        dragAxis = 2;
+                }
+            }
+
+            if (dragAxis == 1 || dragAxis == 0)
+            {
+                currentRadius += dx;
+                currentRadius = maxon::ClampValue(currentRadius, Float(5.0), Float(500.0));
+                data.SetFloat(QUADDRAW_RELAX_RADIUS, currentRadius);
+                StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Relax Radius: @ px (Drag Left/Right to adjust)"_s, (Int32)(currentRadius + 0.5)));
+            }
+            if (dragAxis == 2 || (dragAxis == 0 && std::abs(totalDy) > std::abs(totalDx)))
+            {
+                currentStrength -= dy * 0.005;
+                currentStrength = maxon::ClampValue(currentStrength, Float(0.01), Float(1.0));
+                data.SetFloat(QUADDRAW_RELAX_STRENGTH, currentStrength);
+                StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Relax Strength: @ (Drag Up/Down to adjust)"_s, currentStrength));
+            }
 
             m_cursorX += dx;
             m_cursorY += dy;
-
-            StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Relax Radius: @ px (Drag Left/Right to adjust)"_s, (Int32)(currentRadius + 0.5)));
 
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         }
@@ -838,7 +964,8 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_isResizingBrush = false;
 
         data.SetFloat(QUADDRAW_RELAX_RADIUS, currentRadius);
-        StatusSetText(FormatString("QuadDraw: Relax Radius set to @ px"_s, (Int32)(currentRadius + 0.5)));
+        data.SetFloat(QUADDRAW_RELAX_STRENGTH, currentStrength);
+        StatusSetText(FormatString("QuadDraw: Relax Radius: @ px | Strength: @"_s, (Int32)(currentRadius + 0.5), currentStrength));
 
         EventAdd();
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -2035,7 +2162,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         Float cy = m_isResizingBrush ? m_brushResizeCenterY : m_cursorY;
 
         bd->SetMatrix_Screen();
-        Vector circleColor = m_isResizingBrush ? Vector(1.0, 0.75, 0.15) :
+        Vector circleColor = m_isResizingBrush ? Vector(1.0, 1.0, 1.0) :
                             (m_isRelaxDragging ? Vector(0.15, 0.9, 1.0) : Vector(0.3, 0.75, 1.0));
         bd->SetPen(circleColor);
 
@@ -2052,8 +2179,8 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         if (m_isResizingBrush)
         {
             // Center crosshair
-            bd->DrawLine(Vector(cx - 4.0, cy, 0.0), Vector(cx + 4.0, cy, 0.0), 0);
-            bd->DrawLine(Vector(cx, cy - 4.0, 0.0), Vector(cx, cy + 4.0, 0.0), 0);
+            bd->DrawLine(Vector(cx - 5.0, cy, 0.0), Vector(cx + 5.0, cy, 0.0), 0);
+            bd->DrawLine(Vector(cx, cy - 5.0, 0.0), Vector(cx, cy + 5.0, 0.0), 0);
             // Horizontal radius indicator line to the edge
             bd->DrawLine(Vector(cx, cy, 0.0), Vector(cx + relaxRadius, cy, 0.0), 0);
         }
@@ -2314,6 +2441,8 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_dragPolyIdx = NOTOK;
         m_dragPolyNumPts = 0;
         m_weldTargetIdx = NOTOK;
+        m_isResizingBrush = false;
+        m_isRelaxDragging = false;
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -2329,7 +2458,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- LMB: Click on surface to drop points\n- LMB Drag: Move/tweak vertex (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Ctrl + Hover: Preview Cut / Insert Edge Loop (Maya-style)\n- Ctrl + LMB: Insert Edge Loop / Cut edges (drag to slide, Esc to cancel)\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- LMB: Click on surface to drop points\n- LMB Drag: Move/tweak vertex (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Preview Cut / Insert Edge Loop (Maya-style)\n- Ctrl + LMB: Insert Edge Loop / Cut edges (drag to slide, Esc to cancel)\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }
