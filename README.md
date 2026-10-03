@@ -2,6 +2,7 @@
 
 An interactive retopology tool for Cinema 4D inspired by Autodesk Maya's **Quad Draw**. It allows artists to quickly create, edit, and relax quad-based geometry over an underlying reference surface or in freeform mode.
 
+https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 ---
 
 ## Features
