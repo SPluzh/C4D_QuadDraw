@@ -8,30 +8,6 @@
 namespace cinema
 {
 
-static Bool PolygonHasEdge(const CPolygon& p, Int32 u, Int32 v)
-{
-    Bool isQuad = (p.c != p.d);
-    if ((p.a == u && p.b == v) || (p.a == v && p.b == u)) return true;
-    if ((p.b == u && p.c == v) || (p.b == v && p.c == u)) return true;
-    if (isQuad)
-    {
-        if ((p.c == u && p.d == v) || (p.c == v && p.d == u)) return true;
-        if ((p.d == u && p.a == v) || (p.d == v && p.a == u)) return true;
-    }
-    else
-    {
-        if ((p.c == u && p.a == v) || (p.c == v && p.a == u)) return true;
-    }
-    return false;
-}
-
-static Bool PolygonHasVertex(const CPolygon& p, Int32 v)
-{
-    if (p.a == v || p.b == v || p.c == v) return true;
-    if (p.c != p.d && p.d == v) return true;
-    return false;
-}
-
 MeshBuilder::MeshBuilder()
 {
 }
@@ -1207,7 +1183,7 @@ static Bool SegmentsIntersect2D(const Vector& a, const Vector& b, const Vector& 
     return abOpposite && cdOpposite;
 }
 
-Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY)
+Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh, SurfaceSnapper* snapper, Float* outAvgZ)
 {
     if (!bd || !mesh || mesh->GetPolygonCount() == 0)
         return NOTOK;
@@ -1217,13 +1193,33 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
     const Vector* pts = mesh->GetPointR();
     Matrix mg = mesh->GetMg();
 
-    Vector pNear = bd->SW(Vector(screenX, screenY, 0.0));
-    Vector pFar  = bd->SW(Vector(screenX, screenY, 1000.0));
-    Vector rayDir = (pFar - pNear).GetNormalized();
-
     Vector pScreen(screenX, screenY, 0.0);
     Int32 closestPoly = NOTOK;
     Float minZ = 1e30;
+
+    Float targetZAtCursor = 1e30;
+    Bool hasTargetHit = false;
+    if (targetMesh && snapper && targetMesh->GetPolygonCount() > 0)
+    {
+        SnapResult tSnap = snapper->RaycastSurface(bd, targetMesh, screenX, screenY);
+        if (tSnap.valid)
+        {
+            targetZAtCursor = bd->WS(tSnap.worldPos).z;
+            hasTargetHit = true;
+        }
+    }
+    Float targetTol = maxon::Max(Float(15.0), Float(targetZAtCursor * 0.05));
+
+    auto calcDepth2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Float {
+        Float denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (std::abs(denom) < 1e-9)
+            return (a.z + b.z + c.z) / 3.0;
+        Float invDenom = 1.0 / denom;
+        Float u = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) * invDenom;
+        Float v = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) * invDenom;
+        Float w = 1.0 - u - v;
+        return u * a.z + v * b.z + w * c.z;
+    };
 
     for (Int32 i = 0; i < polyCount; ++i)
     {
@@ -1232,11 +1228,6 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
         Vector wb = mg * pts[p.b];
         Vector wc = mg * pts[p.c];
 
-        // Backface check: normal should face towards camera (Dot(polyNorm, rayDir) < 0)
-        Vector polyNorm = Cross(wb - wa, wc - wa).GetNormalized();
-        if (Dot(polyNorm, rayDir) > 0.1)
-            continue;
-
         Vector sa = bd->WS(wa);
         Vector sb = bd->WS(wb);
         Vector sc = bd->WS(wc);
@@ -1244,26 +1235,40 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
         if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0)
             continue;
 
-        Float avgZ = (sa.z + sb.z + sc.z) / 3.0;
+        Float exactZ = 1e30;
+        Bool hit = false;
 
-        Bool hit = PointInTriangle2D(pScreen, sa, sb, sc);
-        if (!hit && p.c != p.d)
+        if (PointInTriangle2D(pScreen, sa, sb, sc))
+        {
+            hit = true;
+            exactZ = calcDepth2D(pScreen, sa, sb, sc);
+        }
+        else if (p.c != p.d)
         {
             Vector wd = mg * pts[p.d];
             Vector sd = bd->WS(wd);
-            if (sd.z > 0.0)
+            if (sd.z > 0.0 && PointInTriangle2D(pScreen, sa, sc, sd))
             {
-                avgZ = (sa.z + sb.z + sc.z + sd.z) * 0.25;
-                hit = PointInTriangle2D(pScreen, sa, sc, sd);
+                hit = true;
+                exactZ = calcDepth2D(pScreen, sa, sc, sd);
             }
         }
 
-        if (hit && avgZ < minZ)
+        if (hit)
         {
-            minZ = avgZ;
-            closestPoly = i;
+            if (hasTargetHit && exactZ > targetZAtCursor + targetTol)
+                continue; // Behind target mesh!
+
+            if (exactZ < minZ)
+            {
+                minZ = exactZ;
+                closestPoly = i;
+            }
         }
     }
+
+    if (closestPoly != NOTOK && outAvgZ)
+        *outAvgZ = minZ;
 
     return closestPoly;
 }

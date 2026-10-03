@@ -9,6 +9,30 @@
 namespace cinema
 {
 
+inline Bool PolygonHasEdge(const CPolygon& p, Int32 u, Int32 v)
+{
+    Bool isQuad = (p.c != p.d);
+    if ((p.a == u && p.b == v) || (p.a == v && p.b == u)) return true;
+    if ((p.b == u && p.c == v) || (p.b == v && p.c == u)) return true;
+    if (isQuad)
+    {
+        if ((p.c == u && p.d == v) || (p.c == v && p.d == u)) return true;
+        if ((p.d == u && p.a == v) || (p.d == v && p.a == u)) return true;
+    }
+    else
+    {
+        if ((p.c == u && p.a == v) || (p.c == v && p.a == u)) return true;
+    }
+    return false;
+}
+
+inline Bool PolygonHasVertex(const CPolygon& p, Int32 v)
+{
+    if (p.a == v || p.b == v || p.c == v) return true;
+    if (p.c != p.d && p.d == v) return true;
+    return false;
+}
+
 struct QuadPreview
 {
     Bool   valid = false;
@@ -116,8 +140,8 @@ public:
     // Delete a polygon by index
     Bool DeletePolygon(PolygonObject* mesh, Int32 polyIndex);
 
-    // Find nearest polygon under screen point
-    Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY);
+    // Find nearest front-facing polygon under screen point, optionally checking target occlusion
+    Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr, Float* outAvgZ = nullptr);
 
     // Find 4 surrounding vertices that can form a valid convex quad around (screenX, screenY)
     QuadPreview FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, const Vector& targetNormal, Float screenX, Float screenY);

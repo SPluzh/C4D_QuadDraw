@@ -1,4 +1,5 @@
 #include "quaddraw_tool.h"
+#include <cmath>
 #include "description/toolquaddraw.h"
 #include "c4d_basecontainer.h"
 #include "c4d_baseobject.h"
@@ -363,45 +364,94 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
         if (retopo)
         {
-            // Priority 1: Vertex under cursor (within 10 px)
-            Int32 nearVertex = m_snapper.FindNearestRetopoVertex(bd, retopo, x, y, 10.0, NOTOK);
-            if (nearVertex != NOTOK)
-            {
-                m_deleteHighlight.type = DeleteTargetType::Vertex;
-                m_deleteHighlight.index = nearVertex;
-                m_deleteHighlight.worldPos0 = retopo->GetMg() * retopo->GetPointR()[nearVertex];
-            }
-            else
-            {
-                // Priority 2: Edge under cursor (within 8 px)
-                EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 8.0);
-                if (edgeHit.valid)
-                {
-                    m_deleteHighlight.type = DeleteTargetType::Edge;
-                    m_deleteHighlight.edgeV0 = edgeHit.v0;
-                    m_deleteHighlight.edgeV1 = edgeHit.v1;
-                    m_deleteHighlight.worldPos0 = edgeHit.worldPos0;
-                    m_deleteHighlight.worldPos1 = edgeHit.worldPos1;
+            Float polyZ = 1e30;
+            Int32 underPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper, &polyZ);
 
-                    EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, edgeHit.v0, edgeHit.v1);
-                    m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+            if (underPoly != NOTOK && underPoly < retopo->GetPolygonCount())
+            {
+                // When cursor is over a polygon, only its components can be deleted!
+                const CPolygon& p = retopo->GetPolygonR()[underPoly];
+                const Vector* pts = retopo->GetPointR();
+                Matrix rMg = retopo->GetMg();
+
+                Int32 polyVerts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+                Int32 vertCount = (p.c != p.d) ? 4 : 3;
+
+                // Priority 1: Vertex of underPoly
+                Int32 bestPolyV = NOTOK;
+                Float bestVertDist = 10.0;
+                for (Int32 vi = 0; vi < vertCount; ++vi)
+                {
+                    Int32 vIdx = polyVerts[vi];
+                    if (vIdx == NOTOK) continue;
+                    Vector sPos = bd->WS(rMg * pts[vIdx]);
+                    if (sPos.z <= 0.0) continue;
+                    Float dx = sPos.x - x, dy = sPos.y - y;
+                    Float d = std::sqrt(dx * dx + dy * dy);
+                    if (d <= bestVertDist)
+                    {
+                        bestVertDist = d;
+                        bestPolyV = vIdx;
+                    }
+                }
+
+                if (bestPolyV != NOTOK)
+                {
+                    m_deleteHighlight.type = DeleteTargetType::Vertex;
+                    m_deleteHighlight.index = bestPolyV;
+                    m_deleteHighlight.worldPos0 = rMg * pts[bestPolyV];
                 }
                 else
                 {
-                    // Priority 3: Polygon under cursor
-                    Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y);
-                    if (nearPoly != NOTOK)
+                    // Priority 2: Edge of underPoly
+                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, x, y);
+                    if (polyEdge.valid && polyEdge.dist <= 8.0)
                     {
+                        m_deleteHighlight.type = DeleteTargetType::Edge;
+                        m_deleteHighlight.edgeV0 = polyEdge.v0;
+                        m_deleteHighlight.edgeV1 = polyEdge.v1;
+                        m_deleteHighlight.worldPos0 = polyEdge.worldPos0;
+                        m_deleteHighlight.worldPos1 = polyEdge.worldPos1;
+
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
+                        m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    }
+                    else
+                    {
+                        // Priority 3: underPoly itself
                         m_deleteHighlight.type = DeleteTargetType::Polygon;
-                        m_deleteHighlight.index = nearPoly;
-                        const CPolygon& p = retopo->GetPolygonR()[nearPoly];
-                        const Vector* pts = retopo->GetPointR();
-                        Matrix rMg = retopo->GetMg();
+                        m_deleteHighlight.index = underPoly;
                         m_deleteHighlight.polyIsQuad = (p.c != p.d);
                         m_deleteHighlight.polyPts[0] = rMg * pts[p.a];
                         m_deleteHighlight.polyPts[1] = rMg * pts[p.b];
                         m_deleteHighlight.polyPts[2] = rMg * pts[p.c];
                         m_deleteHighlight.polyPts[3] = rMg * pts[p.d];
+                    }
+                }
+            }
+            else
+            {
+                // Cursor in empty space outside polygons
+                Int32 nearVertex = m_snapper.FindNearestRetopoVertex(bd, retopo, x, y, 10.0, NOTOK, target);
+                if (nearVertex != NOTOK)
+                {
+                    m_deleteHighlight.type = DeleteTargetType::Vertex;
+                    m_deleteHighlight.index = nearVertex;
+                    m_deleteHighlight.worldPos0 = retopo->GetMg() * retopo->GetPointR()[nearVertex];
+                }
+                else
+                {
+                    EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 8.0, target);
+                    if (edgeHit.valid)
+                    {
+                        m_deleteHighlight.type = DeleteTargetType::Edge;
+                        m_deleteHighlight.edgeV0 = edgeHit.v0;
+                        m_deleteHighlight.edgeV1 = edgeHit.v1;
+                        m_deleteHighlight.worldPos0 = edgeHit.worldPos0;
+                        m_deleteHighlight.worldPos1 = edgeHit.worldPos1;
+
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, edgeHit.v0, edgeHit.v1);
+                        m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
                     }
                 }
             }
@@ -437,31 +487,33 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
         if (retopo && retopo->GetPolygonCount() > 0)
         {
-            EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 20.0);
             Int32 hitV0 = NOTOK, hitV1 = NOTOK;
             Float hitT = 0.5;
             Int32 hitPoly = NOTOK;
 
-            if (edgeHit.valid)
+            // Priority 1: Check if cursor is directly over a front-facing polygon
+            Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper);
+            if (nearPoly != NOTOK)
             {
-                hitV0 = edgeHit.v0;
-                hitV1 = edgeHit.v1;
-                hitT  = edgeHit.t;
-                hitPoly = edgeHit.polyIndex;
+                EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, x, y);
+                if (polyEdge.valid)
+                {
+                    hitV0 = polyEdge.v0;
+                    hitV1 = polyEdge.v1;
+                    hitT  = polyEdge.t;
+                    hitPoly = nearPoly;
+                }
             }
             else
             {
-                Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y);
-                if (nearPoly != NOTOK)
+                // Priority 2: Cursor near a visible boundary edge
+                EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 12.0, target);
+                if (edgeHit.valid)
                 {
-                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, x, y);
-                    if (polyEdge.valid)
-                    {
-                        hitV0 = polyEdge.v0;
-                        hitV1 = polyEdge.v1;
-                        hitT  = polyEdge.t;
-                        hitPoly = nearPoly;
-                    }
+                    hitV0 = edgeHit.v0;
+                    hitV1 = edgeHit.v1;
+                    hitT  = edgeHit.t;
+                    hitPoly = edgeHit.polyIndex;
                 }
             }
 
@@ -567,8 +619,8 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         }
         else
         {
-            Int32 nearPoly = retopo ? m_builder.FindPolygonUnderScreen(bd, retopo, x, y) : NOTOK;
-            EdgeHit nearEdge = retopo ? m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 12.0) : EdgeHit();
+            Int32 nearPoly = retopo ? m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper) : NOTOK;
+            EdgeHit nearEdge = retopo ? m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 12.0, target) : EdgeHit();
             Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
 
             if (nearPoly != NOTOK || nearEdge.valid)
@@ -616,65 +668,130 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
     if (retopo && retopo->GetPointCount() > 0)
     {
-        // 1. Check Vertex hover
-        Int32 nearV = m_snapper.FindNearestRetopoVertex(bd, retopo, x, y, 10.0);
-        if (nearV != NOTOK)
+        Float polyZ = 1e30;
+        Int32 underPoly = (retopo->GetPolygonCount() > 0)
+            ? m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper, &polyZ) : NOTOK;
+
+        if (underPoly != NOTOK && underPoly < retopo->GetPolygonCount())
         {
-            m_hoverTweak.mode = TweakMode::Vertex;
-            m_hoverTweak.index = nearV;
-            m_hoverSnap.valid = true;
-            m_hoverSnap.mode = SnapMode::RetopoVertex;
-            m_hoverSnap.retopoVertexIndex = nearV;
-
-            bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-            StatusSetText(FormatString("QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
-                nearV, targetName));
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            return true;
-        }
-
-        // 2. Check Edge hover
-        EdgeHit nearEdge = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 8.0);
-        if (nearEdge.valid)
-        {
-            m_hoverTweak.mode = TweakMode::Edge;
-            m_hoverTweak.edgeV0 = nearEdge.v0;
-            m_hoverTweak.edgeV1 = nearEdge.v1;
-            m_hoverTweak.edgeWorld0 = nearEdge.worldPos0;
-            m_hoverTweak.edgeWorld1 = nearEdge.worldPos1;
-
-            bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-            StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
-                nearEdge.v0, nearEdge.v1, targetName));
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            return true;
-        }
-
-        // 3. Check Polygon hover
-        Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y);
-        if (nearPoly != NOTOK && nearPoly < retopo->GetPolygonCount())
-        {
-            const CPolygon& p = retopo->GetPolygonR()[nearPoly];
+            // -------------------------------------------------------------
+            // SITUATION A: CURSOR IS OVER A POLYGON
+            // -------------------------------------------------------------
+            // Background components BEHIND underPoly are completely occluded!
+            const CPolygon& p = retopo->GetPolygonR()[underPoly];
+            const Vector* pts = retopo->GetPointR();
             Matrix rMg = retopo->GetMg();
-            const Vector* rPts = retopo->GetPointR();
 
+            Int32 polyVerts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+            Int32 vertCount = (p.c != p.d) ? 4 : 3;
+
+            // 1. Check vertices of underPoly
+            Int32 bestPolyV = NOTOK;
+            Float bestVertDist = 10.0; // 10 px radius
+            for (Int32 vi = 0; vi < vertCount; ++vi)
+            {
+                Int32 vIdx = polyVerts[vi];
+                if (vIdx == NOTOK) continue;
+                Vector sPos = bd->WS(rMg * pts[vIdx]);
+                if (sPos.z <= 0.0) continue;
+                Float dx = sPos.x - x, dy = sPos.y - y;
+                Float d = std::sqrt(dx * dx + dy * dy);
+                if (d <= bestVertDist)
+                {
+                    bestVertDist = d;
+                    bestPolyV = vIdx;
+                }
+            }
+
+            if (bestPolyV != NOTOK)
+            {
+                m_hoverTweak.mode = TweakMode::Vertex;
+                m_hoverTweak.index = bestPolyV;
+                m_hoverSnap.valid = true;
+                m_hoverSnap.mode = SnapMode::RetopoVertex;
+                m_hoverSnap.retopoVertexIndex = bestPolyV;
+
+                bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
+                    bestPolyV, targetName));
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+
+            // 2. Check edges of underPoly
+            EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, x, y);
+            if (polyEdge.valid && polyEdge.dist <= 8.0)
+            {
+                m_hoverTweak.mode = TweakMode::Edge;
+                m_hoverTweak.edgeV0 = polyEdge.v0;
+                m_hoverTweak.edgeV1 = polyEdge.v1;
+                m_hoverTweak.edgeWorld0 = polyEdge.worldPos0;
+                m_hoverTweak.edgeWorld1 = polyEdge.worldPos1;
+
+                bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                    polyEdge.v0, polyEdge.v1, targetName));
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+
+            // 3. Hover over the polygon itself!
             m_hoverTweak.mode = TweakMode::Polygon;
-            m_hoverTweak.index = nearPoly;
+            m_hoverTweak.index = underPoly;
             m_hoverTweak.polyIsQuad = (p.c != p.d);
             m_hoverTweak.polyPts[0] = p.a;
             m_hoverTweak.polyPts[1] = p.b;
             m_hoverTweak.polyPts[2] = p.c;
             m_hoverTweak.polyPts[3] = p.d;
-            m_hoverTweak.polyWorld[0] = rMg * rPts[p.a];
-            m_hoverTweak.polyWorld[1] = rMg * rPts[p.b];
-            m_hoverTweak.polyWorld[2] = rMg * rPts[p.c];
-            m_hoverTweak.polyWorld[3] = rMg * rPts[p.d];
+            m_hoverTweak.polyWorld[0] = rMg * pts[p.a];
+            m_hoverTweak.polyWorld[1] = rMg * pts[p.b];
+            m_hoverTweak.polyWorld[2] = rMg * pts[p.c];
+            m_hoverTweak.polyWorld[3] = rMg * pts[p.d];
 
             bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
             StatusSetText(FormatString("QuadDraw | LMB Drag: Move Polygon #@ | Target: @"_s,
-                nearPoly, targetName));
+                underPoly, targetName));
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
+        }
+        else
+        {
+            // -------------------------------------------------------------
+            // SITUATION B: CURSOR IN EMPTY SPACE (OUTSIDE POLYGONS)
+            // -------------------------------------------------------------
+            // 1. Check Vertex hover in empty space (boundary vertices, isolated dots)
+            Int32 nearV = m_snapper.FindNearestRetopoVertex(bd, retopo, x, y, 10.0, NOTOK, target);
+            if (nearV != NOTOK)
+            {
+                m_hoverTweak.mode = TweakMode::Vertex;
+                m_hoverTweak.index = nearV;
+                m_hoverSnap.valid = true;
+                m_hoverSnap.mode = SnapMode::RetopoVertex;
+                m_hoverSnap.retopoVertexIndex = nearV;
+
+                bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
+                    nearV, targetName));
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+
+            // 2. Check Edge hover in empty space (boundary edges)
+            EdgeHit nearEdge = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 8.0, target);
+            if (nearEdge.valid)
+            {
+                m_hoverTweak.mode = TweakMode::Edge;
+                m_hoverTweak.edgeV0 = nearEdge.v0;
+                m_hoverTweak.edgeV1 = nearEdge.v1;
+                m_hoverTweak.edgeWorld0 = nearEdge.worldPos0;
+                m_hoverTweak.edgeWorld1 = nearEdge.worldPos1;
+
+                bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                    nearEdge.v0, nearEdge.v1, targetName));
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
         }
     }
 
@@ -790,30 +907,76 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         // If not already detected by GetCursorInfo, run on-the-spot detection
         if (del.type == DeleteTargetType::None)
         {
-            Int32 nv = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 10.0, NOTOK);
-            if (nv != NOTOK)
+            Float polyZ = 1e30;
+            Int32 underPoly = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper, &polyZ);
+
+            if (underPoly != NOTOK && underPoly < retopo->GetPolygonCount())
             {
-                del.type = DeleteTargetType::Vertex;
-                del.index = nv;
-            }
-            else
-            {
-                EdgeHit eh = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 8.0);
-                if (eh.valid)
+                const CPolygon& p = retopo->GetPolygonR()[underPoly];
+                const Vector* pts = retopo->GetPointR();
+                Matrix rMg = retopo->GetMg();
+
+                Int32 polyVerts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+                Int32 vertCount = (p.c != p.d) ? 4 : 3;
+
+                Int32 bestPolyV = NOTOK;
+                Float bestVertDist = 10.0;
+                for (Int32 vi = 0; vi < vertCount; ++vi)
                 {
-                    del.type = DeleteTargetType::Edge;
-                    del.edgeV0 = eh.v0;
-                    del.edgeV1 = eh.v1;
-                    EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, eh.v0, eh.v1);
-                    del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    Int32 vIdx = polyVerts[vi];
+                    if (vIdx == NOTOK) continue;
+                    Vector sPos = bd->WS(rMg * pts[vIdx]);
+                    if (sPos.z <= 0.0) continue;
+                    Float dx = sPos.x - mx, dy = sPos.y - my;
+                    Float d = std::sqrt(dx * dx + dy * dy);
+                    if (d <= bestVertDist)
+                    {
+                        bestVertDist = d;
+                        bestPolyV = vIdx;
+                    }
+                }
+
+                if (bestPolyV != NOTOK)
+                {
+                    del.type = DeleteTargetType::Vertex;
+                    del.index = bestPolyV;
                 }
                 else
                 {
-                    Int32 np = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my);
-                    if (np != NOTOK)
+                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, mx, my);
+                    if (polyEdge.valid && polyEdge.dist <= 8.0)
+                    {
+                        del.type = DeleteTargetType::Edge;
+                        del.edgeV0 = polyEdge.v0;
+                        del.edgeV1 = polyEdge.v1;
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
+                        del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    }
+                    else
                     {
                         del.type = DeleteTargetType::Polygon;
-                        del.index = np;
+                        del.index = underPoly;
+                    }
+                }
+            }
+            else
+            {
+                Int32 nv = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 10.0, NOTOK, target);
+                if (nv != NOTOK)
+                {
+                    del.type = DeleteTargetType::Vertex;
+                    del.index = nv;
+                }
+                else
+                {
+                    EdgeHit eh = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 8.0, target);
+                    if (eh.valid)
+                    {
+                        del.type = DeleteTargetType::Edge;
+                        del.edgeV0 = eh.v0;
+                        del.edgeV1 = eh.v1;
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, eh.v0, eh.v1);
+                        del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
                     }
                 }
             }
@@ -875,31 +1038,33 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     {
         if (!m_edgeCutPreview.valid)
         {
-            EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 25.0);
             Int32 hitV0 = NOTOK, hitV1 = NOTOK;
             Float hitT = 0.5;
             Int32 hitPoly = NOTOK;
 
-            if (edgeHit.valid)
+            // Priority 1: Check front polygon under cursor
+            Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper);
+            if (nearPoly != NOTOK)
             {
-                hitV0 = edgeHit.v0;
-                hitV1 = edgeHit.v1;
-                hitT  = edgeHit.t;
-                hitPoly = edgeHit.polyIndex;
+                EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, mx, my);
+                if (polyEdge.valid)
+                {
+                    hitV0 = polyEdge.v0;
+                    hitV1 = polyEdge.v1;
+                    hitT  = polyEdge.t;
+                    hitPoly = nearPoly;
+                }
             }
             else
             {
-                Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my);
-                if (nearPoly != NOTOK)
+                // Priority 2: Check nearby visible boundary edge
+                EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 12.0, target);
+                if (edgeHit.valid)
                 {
-                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, mx, my);
-                    if (polyEdge.valid)
-                    {
-                        hitV0 = polyEdge.v0;
-                        hitV1 = polyEdge.v1;
-                        hitT  = polyEdge.t;
-                        hitPoly = nearPoly;
-                    }
+                    hitV0 = edgeHit.v0;
+                    hitV1 = edgeHit.v1;
+                    hitT  = edgeHit.t;
+                    hitPoly = edgeHit.polyIndex;
                 }
             }
 
@@ -1118,9 +1283,62 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         return pt;
     };
 
-    // Priority 1: Vertex Drag
-    Int32 hitV = (retopo && retopo->GetPointCount() > 0)
-        ? m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 10.0) : NOTOK;
+    Float polyZ = 1e30;
+    Int32 underPoly = (retopo && retopo->GetPolygonCount() > 0)
+        ? m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper, &polyZ) : NOTOK;
+
+    Int32 hitV = NOTOK;
+    EdgeHit hitEdge;
+    Int32 hitPoly = NOTOK;
+
+    if (underPoly != NOTOK && underPoly < retopo->GetPolygonCount())
+    {
+        // SITUATION A: Cursor over a polygon -> interact ONLY with its components!
+        const CPolygon& p = retopo->GetPolygonR()[underPoly];
+        const Vector* pts = retopo->GetPointR();
+        Matrix rMg = retopo->GetMg();
+
+        Int32 polyVerts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+        Int32 vertCount = (p.c != p.d) ? 4 : 3;
+
+        Float bestVertDist = 10.0;
+        for (Int32 vi = 0; vi < vertCount; ++vi)
+        {
+            Int32 vIdx = polyVerts[vi];
+            if (vIdx == NOTOK) continue;
+            Vector sPos = bd->WS(rMg * pts[vIdx]);
+            if (sPos.z <= 0.0) continue;
+            Float dx = sPos.x - mx, dy = sPos.y - my;
+            Float d = std::sqrt(dx * dx + dy * dy);
+            if (d <= bestVertDist)
+            {
+                bestVertDist = d;
+                hitV = vIdx;
+            }
+        }
+
+        if (hitV == NOTOK)
+        {
+            EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, mx, my);
+            if (polyEdge.valid && polyEdge.dist <= 8.0)
+            {
+                hitEdge = polyEdge;
+            }
+            else
+            {
+                hitPoly = underPoly;
+            }
+        }
+    }
+    else if (retopo && retopo->GetPointCount() > 0)
+    {
+        // SITUATION B: Cursor in empty space outside polygons
+        hitV = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 10.0, NOTOK, target);
+        if (hitV == NOTOK && retopo->GetPolygonCount() > 0)
+        {
+            hitEdge = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 8.0, target);
+        }
+    }
 
     if (hitV != NOTOK)
     {
@@ -1165,7 +1383,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
 
             if (hasMovePos)
             {
-                Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 12.0, hitV);
+                Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 12.0, hitV, target);
                 if (weldTarget != NOTOK)
                 {
                     m_weldTargetIdx = weldTarget;
@@ -1209,12 +1427,6 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // Priority 2: Edge Drag
-    EdgeHit hitEdge;
-    if (retopo && retopo->GetPolygonCount() > 0)
-    {
-        hitEdge = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 8.0);
-    }
-
     if (hitEdge.valid)
     {
         Int32 v0 = hitEdge.v0;
@@ -1298,9 +1510,6 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // Priority 3: Polygon Drag
-    Int32 hitPoly = (retopo && retopo->GetPolygonCount() > 0)
-        ? m_builder.FindPolygonUnderScreen(bd, retopo, mx, my) : NOTOK;
-
     if (hitPoly != NOTOK && hitPoly < retopo->GetPolygonCount())
     {
         const CPolygon& p = retopo->GetPolygonR()[hitPoly];

@@ -198,7 +198,7 @@ SnapResult SurfaceSnapper::ProjectPointAlongNormal(PolygonObject* targetMesh, co
     return result;
 }
 
-Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, Int32 excludeIndex)
+Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, Int32 excludeIndex, PolygonObject* targetMesh)
 {
     if (!bd || !retopoMesh || retopoMesh->GetPointCount() == 0)
         return NOTOK;
@@ -207,8 +207,29 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
     const Vector* pts = retopoMesh->GetPointR();
     Matrix rMg = retopoMesh->GetMg();
 
-    Float bestDistSq = maxRadiusPixels * maxRadiusPixels;
-    Int32 bestIdx = NOTOK;
+    // 1. Check depth against Target Mesh surface under cursor (if targetMesh is provided)
+    Float targetDepthAtCursor = 1e30;
+    Bool hasTargetHit = false;
+    if (targetMesh && targetMesh->GetPolygonCount() > 0)
+    {
+        SnapResult tSnap = RaycastSurface(bd, targetMesh, screenX, screenY);
+        if (tSnap.valid)
+        {
+            targetDepthAtCursor = bd->WS(tSnap.worldPos).z;
+            hasTargetHit = true;
+        }
+    }
+    Float targetTolerance = maxon::Max(Float(15.0), Float(targetDepthAtCursor * 0.05));
+
+    // 2. Gather candidates within radius
+    struct VertCandidate
+    {
+        Int32 index;
+        Float dist2D;
+        Float z;
+    };
+    maxon::BaseArray<VertCandidate> candidates;
+    Float minZ = 1e30;
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
@@ -218,20 +239,48 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
         Vector sPos = bd->WS(wPos);
         if (sPos.z <= 0.0) continue; // Behind camera
 
+        if (hasTargetHit && sPos.z > targetDepthAtCursor + targetTolerance)
+            continue; // Occluded by target mesh!
+
         Float dx = sPos.x - screenX;
         Float dy = sPos.y - screenY;
-        Float distSq = dx * dx + dy * dy;
-        if (distSq < bestDistSq)
+        Float dist = std::sqrt(dx * dx + dy * dy);
+        if (dist <= maxRadiusPixels)
         {
-            bestDistSq = distSq;
-            bestIdx = i;
+            VertCandidate c;
+            c.index = i;
+            c.dist2D = dist;
+            c.z = sPos.z;
+            candidates.Append(c) iferr_ignore("Append");
+            if (sPos.z < minZ) minZ = sPos.z;
+        }
+    }
+
+    if (candidates.GetCount() == 0) return NOTOK;
+    if (candidates.GetCount() == 1) return candidates[0].index;
+
+    // 3. Select closest candidate in front layer (strict depth tolerance)
+    Float layerTol = maxon::Max(Float(1.0), Float(minZ * 0.01));
+    Int32 bestIdx = NOTOK;
+    Float bestDist = 1e30;
+
+    for (Int32 k = 0; k < (Int32)candidates.GetCount(); ++k)
+    {
+        const VertCandidate& c = candidates[k];
+        if (c.z <= minZ + layerTol)
+        {
+            if (c.dist2D < bestDist)
+            {
+                bestDist = c.dist2D;
+                bestIdx = c.index;
+            }
         }
     }
 
     return bestIdx;
 }
 
-EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels)
+EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, PolygonObject* targetMesh)
 {
     EdgeHit hit;
     if (!bd || !retopoMesh || retopoMesh->GetPolygonCount() == 0)
@@ -242,11 +291,33 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
     const Vector* pts = retopoMesh->GetPointR();
     Matrix mg = retopoMesh->GetMg();
 
+    // 1. Check depth against Target Mesh surface under cursor (if targetMesh is provided)
+    Float targetDepthAtCursor = 1e30;
+    Bool hasTargetHit = false;
+    if (targetMesh && targetMesh->GetPolygonCount() > 0)
+    {
+        SnapResult tSnap = RaycastSurface(bd, targetMesh, screenX, screenY);
+        if (tSnap.valid)
+        {
+            targetDepthAtCursor = bd->WS(tSnap.worldPos).z;
+            hasTargetHit = true;
+        }
+    }
+    Float targetTolerance = maxon::Max(Float(15.0), Float(targetDepthAtCursor * 0.05));
+
+    // 2. Gather candidates
+    struct EdgeCandidate
+    {
+        EdgeHit hit;
+        Float z;
+    };
+    maxon::BaseArray<EdgeCandidate> candidates;
+    Float minZ = 1e30;
     Vector cursor(screenX, screenY, 0.0);
-    Float bestDist = maxRadiusPixels;
 
     auto checkEdge = [&](Int32 u, Int32 v, Int32 polyIdx) {
         if (u < 0 || v < 0 || u == v) return;
+
         Vector wA = mg * pts[u];
         Vector wB = mg * pts[v];
         Vector sA = bd->WS(wA);
@@ -267,17 +338,24 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
         Float dy = cursor.y - proj.y;
         Float d = std::sqrt(dx * dx + dy * dy);
 
-        if (d < bestDist)
+        if (d <= maxRadiusPixels)
         {
-            bestDist = d;
-            hit.valid = true;
-            hit.v0 = u;
-            hit.v1 = v;
-            hit.worldPos0 = wA;
-            hit.worldPos1 = wB;
-            hit.t = t;
-            hit.dist = d;
-            hit.polyIndex = polyIdx;
+            Float projZ = sA.z + (sB.z - sA.z) * t;
+            if (hasTargetHit && projZ > targetDepthAtCursor + targetTolerance)
+                return; // Occluded by target mesh!
+
+            EdgeCandidate ec;
+            ec.hit.valid = true;
+            ec.hit.v0 = u;
+            ec.hit.v1 = v;
+            ec.hit.worldPos0 = wA;
+            ec.hit.worldPos1 = wB;
+            ec.hit.t = t;
+            ec.hit.dist = d;
+            ec.hit.polyIndex = polyIdx;
+            ec.z = projZ;
+            candidates.Append(ec) iferr_ignore("Append");
+            if (projZ < minZ) minZ = projZ;
         }
     };
 
@@ -297,6 +375,26 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
         }
     }
 
+    if (candidates.GetCount() == 0) return hit;
+    if (candidates.GetCount() == 1) return candidates[0].hit;
+
+    // 3. Select closest candidate in front layer (strict depth tolerance)
+    Float layerTol = maxon::Max(Float(1.0), Float(minZ * 0.01));
+    Float bestDist = 1e30;
+
+    for (Int32 k = 0; k < (Int32)candidates.GetCount(); ++k)
+    {
+        const EdgeCandidate& ec = candidates[k];
+        if (ec.z <= minZ + layerTol)
+        {
+            if (ec.hit.dist < bestDist)
+            {
+                bestDist = ec.hit.dist;
+                hit = ec.hit;
+            }
+        }
+    }
+
     return hit;
 }
 
@@ -305,7 +403,7 @@ SnapResult SurfaceSnapper::Snap(BaseDocument* doc, BaseDraw* bd, PolygonObject* 
     // 1. Check if hovering over an existing retopo vertex (for grabbing / dragging)
     if (retopoMesh)
     {
-        Int32 nearRetopo = FindNearestRetopoVertex(bd, retopoMesh, screenX, screenY, snapRadiusPixels, NOTOK);
+        Int32 nearRetopo = FindNearestRetopoVertex(bd, retopoMesh, screenX, screenY, snapRadiusPixels, NOTOK, targetMesh);
         if (nearRetopo != NOTOK)
         {
             SnapResult res;
