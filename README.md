@@ -60,6 +60,10 @@ An interactive retopology tool for Cinema 4D inspired by Autodesk Maya's **Quad 
 
 ## Build and Installation
 
-- To build the plugin, run [build_2026.bat](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/build_2026.bat) or [build_2026.ps1](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/build_2026.ps1).
-- Compiled binary output: `sdk_2026/build/bin/Release/plugins/C4D_QuadDraw/C4D_QuadDraw.xdl64`.
-- To deploy to the Cinema 4D plugins directory: [deploy_2026.bat](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/deploy_2026.bat) or [deploy_2026.ps1](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/deploy_2026.ps1).
+- **Cinema 4D 2026**:
+  - Build: [build_2026.bat](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/build_2026.bat) or [build_2026.ps1](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/build_2026.ps1)
+  - Deploy: [deploy_2026.bat](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/deploy_2026.bat) or [deploy_2026.ps1](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/deploy_2026.ps1)
+
+- **Cinema 4D 2025**:
+  - Build: [build_2025.bat](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/build_2025.bat) or [build_2025.ps1](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/build_2025.ps1)
+  - Deploy: [deploy_2025.bat](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/deploy_2025.bat) or [deploy_2025.ps1](file:///c:/Users/user/Desktop/cpp/C4D_QuadDraw/deploy_2025.ps1)
