@@ -144,7 +144,7 @@ public:
     Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr, Float* outAvgZ = nullptr, const SnapResult* precomputedTargetSnap = nullptr);
 
     // Find 4 surrounding vertices that can form a valid convex quad around (screenX, screenY)
-    QuadPreview FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, const Vector& targetNormal, Float screenX, Float screenY);
+    QuadPreview FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, const Vector& targetNormal, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr);
 
     // Compute interpolation factor t in [0..1] along edge (v0 -> v1) for screen position (screenX, screenY)
     Float ComputeEdgeParam(BaseDraw* bd, PolygonObject* mesh, Int32 v0, Int32 v1, Float screenX, Float screenY);

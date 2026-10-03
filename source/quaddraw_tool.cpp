@@ -707,7 +707,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         if (retopo && retopo->GetPointCount() >= 4)
         {
             Vector viewNormal = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
-            m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y);
+            m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y, target, &m_snapper);
         }
         else
         {
@@ -1257,10 +1257,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             norm = -bd->GetMg().sqmat.v3;
         }
 
-        QuadPreview qp = m_shiftQuadPreview.valid ? m_shiftQuadPreview : m_builder.FindPotentialQuad(bd, retopo, norm, mx, my);
+        QuadPreview qp = m_shiftQuadPreview.valid ? m_shiftQuadPreview : m_builder.FindPotentialQuad(bd, retopo, norm, mx, my, target, &m_snapper);
 
         // Sub-case 3A: Empty prospective quad under cursor -> Click to create quad
-        if (qp.valid && m_builder.FindPolygonUnderScreen(bd, retopo, mx, my) == NOTOK)
+        if (qp.valid && m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper) == NOTOK)
         {
             doc->StartUndo();
             doc->AddUndo(UNDOTYPE::CHANGE, retopo);
@@ -1874,9 +1874,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // Priority 4: Place Point
     Vector dropPos;
     Bool canPlace = false;
+    SnapResult snap;
     if (target)
     {
-        SnapResult snap = m_snapper.RaycastSurface(bd, target, mx, my);
+        snap = m_snapper.RaycastSurface(bd, target, mx, my);
         if (snap.valid)
         {
             dropPos = snap.worldPos;
@@ -1896,7 +1897,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
 
     if (canPlace)
     {
-        if (m_builder.FindPolygonUnderScreen(bd, retopo, mx, my) != NOTOK)
+        if (m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper, nullptr, snap.valid ? &snap : nullptr) != NOTOK)
         {
             StatusSetText("QuadDraw: Cannot place point — polygon already exists here."_s);
             return true;

@@ -272,12 +272,22 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
         return u * a.z + v * b.z + w * c.z;
     };
 
+    Vector camPos = bd->GetMg().off;
+    Bool isOrtho = (bd->GetProjection() != Pperspective);
+    Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
+
     for (Int32 pi = 0; pi < polyCount; ++pi)
     {
         const CPolygon& p = polys[pi];
         Vector wa = rMg * pts[p.a];
         Vector wb = rMg * pts[p.b];
         Vector wc = rMg * pts[p.c];
+
+        Vector fn = Cross(wb - wa, wc - wa);
+        Vector polyCenter = (wa + wb + wc) * (1.0 / 3.0);
+        Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+        if (Dot(fn, toCam) <= 0.0)
+            continue; // Skip backface!
 
         Vector sa = bd->WS(wa);
         Vector sb = bd->WS(wb);
@@ -440,6 +450,10 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
     for (Int32 i = 0; i < ptCount; ++i)
         sPts[i] = bd->WS(mg * pts[i]);
 
+    Vector camPos = bd->GetMg().off;
+    Bool isOrtho = (bd->GetProjection() != Pperspective);
+    Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
+
     for (Int32 pi = 0; pi < polyCount; ++pi)
     {
         const CPolygon& p = polys[pi];
@@ -448,6 +462,15 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
         const Vector& sc = sPts[p.c];
         if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0)
             continue;
+
+        Vector wa = mg * pts[p.a];
+        Vector wb = mg * pts[p.b];
+        Vector wc = mg * pts[p.c];
+        Vector fn = Cross(wb - wa, wc - wa);
+        Vector polyCenter = (wa + wb + wc) * (1.0 / 3.0);
+        Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+        if (Dot(fn, toCam) <= 0.0)
+            continue; // Skip backface!
 
         Float pMinX = std::min(std::min(sa.x, sb.x), sc.x);
         Float pMaxX = std::max(std::max(sa.x, sb.x), sc.x);

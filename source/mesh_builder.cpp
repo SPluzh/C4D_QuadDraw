@@ -1216,9 +1216,9 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
     }
     Float targetTol = maxon::Max(Float(2.5), Float(targetZAtCursor * 0.005));
 
-    Vector pNear = bd->SW(Vector(screenX, screenY, 0.0));
-    Vector pFar  = bd->SW(Vector(screenX, screenY, 1000.0));
-    Vector toCam = (pNear - pFar).GetNormalized();
+    Vector camPos = bd->GetMg().off;
+    Bool isOrtho = (bd->GetProjection() != Pperspective);
+    Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
 
     auto calcDepth2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Float {
         Float denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
@@ -1246,6 +1246,16 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
 
         if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0)
             continue;
+
+        // 1. Backface culling: polygons facing away from camera are on the opposite / back side of the mesh!
+        Vector wa = mg * pts[p.a];
+        Vector wb = mg * pts[p.b];
+        Vector wc = mg * pts[p.c];
+        Vector fn = Cross(wb - wa, wc - wa);
+        Vector polyCenter = (wa + wb + wc) * (1.0 / 3.0);
+        Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+        if (Dot(fn, toCam) <= 0.0)
+            continue; // Skip backface!
 
         Float pMinX = std::min(std::min(sa.x, sb.x), sc.x);
         Float pMaxX = std::max(std::max(sa.x, sb.x), sc.x);
@@ -1307,14 +1317,14 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
     return closestPoly;
 }
 
-QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, const Vector& targetNormal, Float screenX, Float screenY)
+QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, const Vector& targetNormal, Float screenX, Float screenY, PolygonObject* targetMesh, SurfaceSnapper* snapper)
 {
     QuadPreview result;
     result.valid = false;
     if (!bd || !retopo) return result;
 
-    // Rule 1: Never create or preview a quad if cursor is already over an existing polygon!
-    if (FindPolygonUnderScreen(bd, retopo, screenX, screenY) != NOTOK)
+    // Rule 1: Never create or preview a quad if cursor is already over an existing front polygon!
+    if (FindPolygonUnderScreen(bd, retopo, screenX, screenY, targetMesh, snapper) != NOTOK)
         return result;
 
     Int32 ptCount = retopo->GetPointCount();
@@ -1354,6 +1364,19 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
         Float distSq = dx * dx + dy * dy;
         if (distSq <= maxRadiusSq)
         {
+            // If targetMesh and snapper are provided, test if vertex is occluded behind target mesh
+            if (targetMesh && snapper)
+            {
+                SnapResult tSnap = snapper->RaycastSurface(bd, targetMesh, sPos.x, sPos.y);
+                if (tSnap.valid)
+                {
+                    Float tZ = bd->WS(tSnap.worldPos).z;
+                    Float tol = maxon::Max(Float(2.5), Float(tZ * 0.005));
+                    if (sPos.z > tZ + tol)
+                        continue; // Vertex is behind the target mesh!
+                }
+            }
+
             CandidatePt cp;
             cp.index = i;
             cp.worldPos = wPos;
@@ -1510,7 +1533,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                         continue;
 
                     // Centroid must not be inside any existing polygon!
-                    if (FindPolygonUnderScreen(bd, retopo, centroid.x, centroid.y) != NOTOK)
+                    if (FindPolygonUnderScreen(bd, retopo, centroid.x, centroid.y, targetMesh, snapper) != NOTOK)
                         continue;
 
                     // Ensure no other retopo vertex is inside this quad (using precomputed allScreenPts!)
