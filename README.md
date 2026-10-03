@@ -19,28 +19,32 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
    - Continuous raycast projection onto the target mesh surface (`TargetSurface`).
    - Screen-space snapping to existing retopo vertices with automatic weld on drop.
 
-3. **Quad Creation**:
+3. **Edge Extrusion (Extrude Edge)**:
+   - **LMB Drag on Border Edge** (or **MMB Drag**): interactively extrudes a new quad polygon from the highlighted border edge along the surface (or in view plane), with real-time surface snapping and automatic vertex welding on drop. The newly extruded outer edge remains highlighted for fast, continuous quad strip creation.
+   - Controlled by the **"Extrude Border Edges (LMB Drag)"** checkbox in the tool's Interactive Settings (enabled by default). When unchecked, LMB drag on border edges reverts to standard tweak/move.
+
+4. **Quad Creation**:
    - **Shift + Hover**: previews prospective quad polygons based on nearby vertices.
    - **Shift + LMB**: instantly creates quad polygons with correct surface normal orientation.
 
-4. **Maya-Style Relax Brush**:
+5. **Maya-Style Relax Brush**:
    - **Shift + LMB Drag** over faces or edges smooths topology.
    - Multiple relax modes: Auto-Lock (preserves borders or interiors depending on stroke origin), Border Only, Interior Only, or All.
    - **Shift + MMB Drag**: interactively adjusts relax brush radius (horizontal drag) and strength (vertical drag), identical to C4D_RelaxTool.
 
-5. **Edge Loop Insertion (Cut Tool)**:
+6. **Edge Loop Insertion (Cut Tool)**:
    - **Ctrl + Hover**: previews edge loops across quad rings.
    - **Ctrl + LMB Drag**: inserts edge loops with interactive slide positioning.
 
-6. **Interactive Component Deletion**:
+7. **Interactive Component Deletion**:
    - **Ctrl + Shift + Hover**: highlights vertices, edge loops, or polygons in red.
    - **Ctrl + Shift + LMB**: removes the highlighted component.
 
-7. **Tweak Mode**:
+8. **Tweak Mode**:
    - **LMB Drag** on vertices, edges, or polygons moves components directly.
    - Dragging a vertex onto another merges them automatically (Weld).
 
-8. **Display Settings**:
+9. **Display Settings**:
    - **Disable Custom Mesh Shading** (`QUADDRAW_DISABLE_CUSTOM_SHADING`): checked by default to keep clean native Cinema 4D viewport shading on the editable mesh upon tool activation. Uncheck to display translucent retopo polygon face overlays (`Face Color` & `Face Opacity`).
    - **Disable X-Ray (Tools & Shading)** (`QUADDRAW_DISABLE_XRAY`): checked by default to completely prevent vertices, edge cut loops, quad previews, component highlights, and custom shading from being drawn through the mesh (hardware depth testing, Cinema 4D `INVERSE_Z` pass culling, and normal backface culling). Uncheck to see tools and overlays through geometry (X-Ray mode).
    - Configurable wireframe color, line width, vertex point size, and interactive hover colors.
@@ -52,7 +56,9 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 | Shortcut | Action |
 |---|---|
 | **LMB Click** | Place a point on the surface (or in view plane if no target) |
-| **LMB Drag** | Tweak/move vertex, edge, or polygon (welds on vertex drop) |
+| **LMB Drag on Border Edge** | Extrude border edge (when setting is enabled; creates new quad, snaps & welds on drop) |
+| **LMB Drag** | Tweak/move vertex, interior edge, or polygon (welds on vertex drop) |
+| **MMB Drag on Edge** | Extrude highlighted border edge (alternative shortcut) |
 | **Shift + Hover** | Preview prospective quad polygon |
 | **Shift + LMB** | Create quad polygon from preview |
 | **Shift + LMB Drag** | Relax topology using the relax brush |

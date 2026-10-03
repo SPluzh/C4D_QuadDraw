@@ -224,6 +224,171 @@ Bool MeshBuilder::AddTriangle(PolygonObject* mesh, Int32 a, Int32 b, Int32 c, co
     return true;
 }
 
+ExtrudeEdgeResult MeshBuilder::ExtrudeEdge(PolygonObject* mesh, Int32 v0, Int32 v1, const Vector& pos0, const Vector& pos1, const Vector& targetNormal)
+{
+    ExtrudeEdgeResult result;
+    if (!mesh || v0 == v1) return result;
+    Int32 ptCount = mesh->GetPointCount();
+    Int32 polyCount = mesh->GetPolygonCount();
+    if (v0 < 0 || v0 >= ptCount || v1 < 0 || v1 >= ptCount) return result;
+
+    const CPolygon* oldPolys = mesh->GetPolygonR();
+    Int32 edgePolyCount = 0;
+    Int32 adjPolyIdx = NOTOK;
+    Bool adjReversed = false;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (PolygonHasEdge(p, v0, v1))
+        {
+            edgePolyCount++;
+            adjPolyIdx = i;
+            Bool isQuad = (p.c != p.d);
+            if ((p.a == v1 && p.b == v0) || (p.b == v1 && p.c == v0) ||
+                (isQuad && p.c == v1 && p.d == v0) || (isQuad && p.d == v1 && p.a == v0) ||
+                (!isQuad && p.c == v1 && p.a == v0))
+            {
+                adjReversed = true;
+            }
+        }
+    }
+
+    if (edgePolyCount >= 2)
+        return result;
+
+    Int32 newV0 = AddVertex(mesh, pos0);
+    if (newV0 == NOTOK) return result;
+
+    Int32 newV1 = AddVertex(mesh, pos1);
+    if (newV1 == NOTOK)
+    {
+        DeleteVertex(mesh, newV0);
+        return result;
+    }
+
+    Int32 q0, q1, q2, q3;
+    if (edgePolyCount == 1)
+    {
+        if (adjReversed)
+        {
+            q0 = v0;
+            q1 = v1;
+            q2 = newV1;
+            q3 = newV0;
+        }
+        else
+        {
+            q0 = v1;
+            q1 = v0;
+            q2 = newV0;
+            q3 = newV1;
+        }
+    }
+    else
+    {
+        q0 = v0;
+        q1 = v1;
+        q2 = newV1;
+        q3 = newV0;
+    }
+
+    Vector norm = targetNormal;
+    if (norm.GetSquaredLength() < 1e-4 && adjPolyIdx != NOTOK)
+    {
+        const Vector* pts = mesh->GetPointR();
+        const CPolygon& p = oldPolys[adjPolyIdx];
+        Vector pA = mesh->GetMg() * pts[p.a];
+        Vector pB = mesh->GetMg() * pts[p.b];
+        Vector pC = mesh->GetMg() * pts[p.c];
+        Vector n = Cross(pB - pA, pC - pA);
+        if (n.GetSquaredLength() > 1e-6)
+            norm = n.GetNormalized();
+    }
+
+    if (!AddQuad(mesh, q0, q1, q2, q3, norm))
+    {
+        DeleteVertex(mesh, newV1);
+        DeleteVertex(mesh, newV0);
+        return result;
+    }
+
+    result.valid = true;
+    result.newV0 = newV0;
+    result.newV1 = newV1;
+    result.newPoly = mesh->GetPolygonCount() - 1;
+    return result;
+}
+
+Bool MeshBuilder::IsBoundaryOrIsolatedVertex(PolygonObject* mesh, Int32 ptIndex)
+{
+    if (!mesh || ptIndex < 0 || ptIndex >= mesh->GetPointCount())
+        return false;
+
+    Int32 polyCount = mesh->GetPolygonCount();
+    if (polyCount == 0) return true;
+
+    const CPolygon* polys = mesh->GetPolygonR();
+
+    maxon::BaseArray<Int32> neighbors;
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = polys[i];
+        Bool isQuad = (p.c != p.d);
+        if (p.a == ptIndex)
+        {
+            neighbors.Append(p.b) iferr_ignore("Append");
+            if (isQuad) neighbors.Append(p.d) iferr_ignore("Append");
+            else neighbors.Append(p.c) iferr_ignore("Append");
+        }
+        if (p.b == ptIndex)
+        {
+            neighbors.Append(p.a) iferr_ignore("Append");
+            neighbors.Append(p.c) iferr_ignore("Append");
+        }
+        if (p.c == ptIndex)
+        {
+            neighbors.Append(p.b) iferr_ignore("Append");
+            if (isQuad) neighbors.Append(p.d) iferr_ignore("Append");
+            else neighbors.Append(p.a) iferr_ignore("Append");
+        }
+        if (isQuad && p.d == ptIndex)
+        {
+            neighbors.Append(p.c) iferr_ignore("Append");
+            neighbors.Append(p.a) iferr_ignore("Append");
+        }
+    }
+
+    if (neighbors.GetCount() == 0)
+        return true;
+
+    maxon::BaseArray<Int32> uniqueNeighbors;
+    for (Int32 n : neighbors)
+    {
+        Bool found = false;
+        for (Int32 un : uniqueNeighbors)
+        {
+            if (un == n) { found = true; break; }
+        }
+        if (!found)
+            uniqueNeighbors.Append(n) iferr_ignore("Append");
+    }
+
+    for (Int32 n : uniqueNeighbors)
+    {
+        Int32 edgeCnt = 0;
+        for (Int32 i = 0; i < polyCount; ++i)
+        {
+            if (PolygonHasEdge(polys[i], ptIndex, n))
+                edgeCnt++;
+        }
+        if (edgeCnt == 1)
+            return true;
+    }
+
+    return false;
+}
+
 Bool MeshBuilder::SetVertexPosition(PolygonObject* mesh, Int32 index, const Vector& worldPos)
 {
     if (!mesh || index < 0 || index >= mesh->GetPointCount())

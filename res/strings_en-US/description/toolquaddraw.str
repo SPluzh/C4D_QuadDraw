@@ -12,6 +12,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_POINT_SIZE             "Point Size";
 
     QUADDRAW_GROUP_INTERACTIVE      "Interactive Settings";
+    QUADDRAW_BORDER_EXTRUDE_LMB     "Extrude Border Edges (LMB Drag)";
     QUADDRAW_PREVIEW_COLOR          "Quad Preview Color (Shift)";
     QUADDRAW_CUT_COLOR              "Cut Loop Color (Ctrl)";
     QUADDRAW_HIGHLIGHT_COLOR        "Hover Highlight Color";

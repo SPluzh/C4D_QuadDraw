@@ -101,6 +101,14 @@ struct EdgeCutResult
     Bool                         isClosed = false;
 };
 
+struct ExtrudeEdgeResult
+{
+    Bool  valid = false;
+    Int32 newV0 = NOTOK;
+    Int32 newV1 = NOTOK;
+    Int32 newPoly = NOTOK;
+};
+
 class MeshBuilder
 {
 public:
@@ -157,6 +165,12 @@ public:
 
     // Apply the edge loop cut to the retopo mesh, splitting quads and inserting new vertices
     Bool ApplyEdgeLoopCut(PolygonObject* retopo, const EdgeCutResult& cutResult);
+
+    // Extrude a border edge (v0, v1), creating a new quad with new vertices at pos0 and pos1
+    ExtrudeEdgeResult ExtrudeEdge(PolygonObject* mesh, Int32 v0, Int32 v1, const Vector& pos0, const Vector& pos1, const Vector& targetNormal);
+
+    // Check if a vertex is on a boundary or isolated (eligible for weld target)
+    Bool IsBoundaryOrIsolatedVertex(PolygonObject* mesh, Int32 ptIndex);
 
     // Check if a screen position is near the outer boundary of the retopo mesh (visible front-facing geometry)
     Bool IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, PolygonObject* target = nullptr, SurfaceSnapper* snapper = nullptr, Bool visibleOnly = true);

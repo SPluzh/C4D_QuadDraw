@@ -36,6 +36,9 @@ private:
     BaseTag*       EnsureQuadDrawTag(BaseDocument* doc, PolygonObject* mesh);
     PolygonObject* CreateNewRetopoMesh(BaseDocument* doc);
     PolygonObject* FindExistingRetopoMesh(BaseDocument* doc);
+    Bool           DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                     PolygonObject* retopo, PolygonObject* target, Int32 v0, Int32 v1,
+                                     Float mx, Float my, Int32 dragButton);
 
     SurfaceSnapper m_snapper;
     MeshBuilder    m_builder;
@@ -126,6 +129,7 @@ private:
     Int32         m_dragPolyPts[4] = { NOTOK, NOTOK, NOTOK, NOTOK };
     Int32         m_dragPolyNumPts = 0;
     Int32         m_weldTargetIdx = NOTOK;
+    Int32         m_weldTargetIdx2 = NOTOK;
 };
 
 Bool RegisterQuadDraw();

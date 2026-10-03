@@ -38,6 +38,7 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
     m_dragPolyIdx = NOTOK;
     m_dragPolyNumPts = 0;
     m_weldTargetIdx = NOTOK;
+    m_weldTargetIdx2 = NOTOK;
 
     if (doc)
     {
@@ -122,6 +123,7 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     data.SetFloat(QUADDRAW_LINE_WIDTH, 1.0);
     data.SetFloat(QUADDRAW_POINT_SIZE, 6.0);
 
+    data.SetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
     data.SetVector(QUADDRAW_PREVIEW_COLOR, Vector(0.15, 0.85, 0.45));
     data.SetVector(QUADDRAW_CUT_COLOR, Vector(0.2, 1.0, 0.4));
     data.SetVector(QUADDRAW_HIGHLIGHT_COLOR, defaultHighlightColor);
@@ -153,6 +155,7 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
     m_dragPolyIdx = NOTOK;
     m_dragPolyNumPts = 0;
     m_weldTargetIdx = NOTOK;
+    m_weldTargetIdx2 = NOTOK;
 }
 
 Bool QuadDrawToolData::GetDDescription(const BaseDocument* doc, const BaseContainer& data, Description* description, DESCFLAGS_DESC& flags) const
@@ -222,25 +225,8 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
             ToolAskMsgData* ask = static_cast<ToolAskMsgData*>(t_data);
             if (ask)
             {
-                Bool isShift = m_shiftHeld;
-                if (ask->msg)
-                {
-                    Int32 qual = ask->msg->GetInt32(BFM_INPUT_QUALIFIER);
-                    if ((qual & QSHIFT) != 0)
-                        isShift = true;
-                }
-                BaseContainer ks;
-                if (GetInputState(BFM_INPUT_KEYBOARD, BFM_INPUT_QUALIFIER, ks))
-                {
-                    if ((ks.GetInt32(BFM_INPUT_QUALIFIER) & QSHIFT) != 0)
-                        isShift = true;
-                }
-
-                if (isShift)
-                {
-                    ask->use_middlemouse = true;
-                    ask->resize_allowed = true;
-                }
+                ask->use_middlemouse = true;
+                ask->resize_allowed = true;
             }
             return true;
         }
@@ -800,9 +786,32 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 m_hoverTweak.edgeWorld0 = polyEdge.worldPos0;
                 m_hoverTweak.edgeWorld1 = polyEdge.worldPos1;
 
+                Bool extrudeLMB = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+                Int32 edgePolyCount = 0;
+                Int32 pCount = retopo->GetPolygonCount();
+                const CPolygon* rPolys = retopo->GetPolygonR();
+                for (Int32 i = 0; i < pCount; ++i)
+                {
+                    if (PolygonHasEdge(rPolys[i], polyEdge.v0, polyEdge.v1))
+                        edgePolyCount++;
+                }
+
                 bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
-                    polyEdge.v0, polyEdge.v1, targetName));
+                if (extrudeLMB && edgePolyCount < 2)
+                {
+                    StatusSetText(FormatString("QuadDraw | LMB Drag: Extrude Edge (#@ - #@) | Target: @"_s,
+                        polyEdge.v0, polyEdge.v1, targetName));
+                }
+                else if (edgePolyCount >= 2)
+                {
+                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s,
+                        polyEdge.v0, polyEdge.v1, targetName));
+                }
+                else
+                {
+                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                        polyEdge.v0, polyEdge.v1, targetName));
+                }
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
@@ -858,9 +867,32 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 m_hoverTweak.edgeWorld0 = nearEdge.worldPos0;
                 m_hoverTweak.edgeWorld1 = nearEdge.worldPos1;
 
+                Bool extrudeLMB = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+                Int32 edgePolyCount = 0;
+                Int32 pCount = retopo->GetPolygonCount();
+                const CPolygon* rPolys = retopo->GetPolygonR();
+                for (Int32 i = 0; i < pCount; ++i)
+                {
+                    if (PolygonHasEdge(rPolys[i], nearEdge.v0, nearEdge.v1))
+                        edgePolyCount++;
+                }
+
                 bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
-                    nearEdge.v0, nearEdge.v1, targetName));
+                if (extrudeLMB && edgePolyCount < 2)
+                {
+                    StatusSetText(FormatString("QuadDraw | LMB Drag: Extrude Edge (#@ - #@) | Target: @"_s,
+                        nearEdge.v0, nearEdge.v1, targetName));
+                }
+                else if (edgePolyCount >= 2)
+                {
+                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s,
+                        nearEdge.v0, nearEdge.v1, targetName));
+                }
+                else
+                {
+                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                        nearEdge.v0, nearEdge.v1, targetName));
+                }
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
@@ -900,6 +932,300 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             retopo ? retopo->GetName() : "None"_s, targetName, retopoPts, retopoPolys));
     }
 
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    return true;
+}
+
+Bool QuadDrawToolData::DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                        PolygonObject* retopo, PolygonObject* target, Int32 v0, Int32 v1,
+                                        Float mx, Float my, Int32 dragButton)
+{
+    if (!doc || !bd || !win || !retopo) return false;
+
+    Int32 polyCount = retopo->GetPolygonCount();
+    const CPolygon* oldPolys = retopo->GetPolygonR();
+
+    auto countPolysForEdge = [&](Int32 u, Int32 v) -> Int32 {
+        Int32 cnt = 0;
+        for (Int32 i = 0; i < polyCount; ++i)
+        {
+            if (PolygonHasEdge(oldPolys[i], u, v)) cnt++;
+        }
+        return cnt;
+    };
+
+    Int32 edgePolyCount = countPolysForEdge(v0, v1);
+    if (edgePolyCount >= 2)
+    {
+        StatusSetText("QuadDraw: Cannot extrude interior edge (only border edges can be extruded)."_s);
+        return false;
+    }
+
+    Int32 adjPolyIdx = NOTOK;
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        if (PolygonHasEdge(oldPolys[i], v0, v1))
+        {
+            adjPolyIdx = i;
+            break;
+        }
+    }
+
+    Vector initP0 = retopo->GetMg() * retopo->GetPointR()[v0];
+    Vector initP1 = retopo->GetMg() * retopo->GetPointR()[v1];
+    Vector s0 = bd->WS(initP0);
+    Vector s1 = bd->WS(initP1);
+    if (s0.z <= 0.0 || s1.z <= 0.0) return false;
+
+    // Determine initial normal orientation
+    Vector targetNorm(0.0, 1.0, 0.0);
+    Bool hasNorm = false;
+    if (adjPolyIdx != NOTOK)
+    {
+        const Vector* pts = retopo->GetPointR();
+        const CPolygon& p = oldPolys[adjPolyIdx];
+        Vector pA = retopo->GetMg() * pts[p.a];
+        Vector pB = retopo->GetMg() * pts[p.b];
+        Vector pC = retopo->GetMg() * pts[p.c];
+        Vector n = Cross(pB - pA, pC - pA);
+        if (n.GetSquaredLength() > 1e-6)
+        {
+            targetNorm = n.GetNormalized();
+            hasNorm = true;
+        }
+    }
+    if (target)
+    {
+        SnapResult snap = m_snapper.RaycastSurface(bd, target, mx, my);
+        if (snap.valid)
+        {
+            if (hasNorm && Dot(targetNorm, snap.normal) < 0.0)
+                targetNorm = -targetNorm;
+            else if (!hasNorm)
+                targetNorm = snap.normal;
+        }
+    }
+    else if (!hasNorm && bd)
+    {
+        targetNorm = -bd->GetMg().sqmat.v3;
+    }
+
+    BaseContainer device;
+    win->MouseDragStart(dragButton, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+    Float dx, dy;
+    Float totalDx = 0.0, totalDy = 0.0;
+    Bool isDragging = false;
+    Vector lastP0 = initP0, lastP1 = initP1;
+    Vector lastNorm0(0.0, 1.0, 0.0), lastNorm1(0.0, 1.0, 0.0);
+    const Float DRAG_THRESHOLD = 3.0;
+
+    Int32 newV0 = NOTOK;
+    Int32 newV1 = NOTOK;
+    Int32 newPoly = NOTOK;
+    Int32 weldTarget0 = NOTOK;
+    Int32 weldTarget1 = NOTOK;
+
+    while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+    {
+        if (dx == 0.0 && dy == 0.0) continue;
+        totalDx += dx;
+        totalDy += dy;
+
+        Float currS0x = s0.x + totalDx;
+        Float currS0y = s0.y + totalDy;
+        Float currS1x = s1.x + totalDx;
+        Float currS1y = s1.y + totalDy;
+
+        Vector p0 = initP0, p1 = initP1;
+        Bool hasP0 = false, hasP1 = false;
+
+        if (target)
+        {
+            SnapResult h0 = m_snapper.RaycastSurface(bd, target, currS0x, currS0y);
+            if (h0.valid)
+            {
+                p0 = h0.worldPos;
+                lastP0 = p0;
+                lastNorm0 = h0.normal;
+                hasP0 = true;
+            }
+            else
+            {
+                Vector cand0 = bd->SW_Reference(currS0x, currS0y, lastP0);
+                SnapResult pr0 = m_snapper.ProjectPointAlongNormal(target, cand0, lastNorm0, 500.0);
+                if (pr0.valid) { p0 = pr0.worldPos; hasP0 = true; }
+            }
+
+            SnapResult h1 = m_snapper.RaycastSurface(bd, target, currS1x, currS1y);
+            if (h1.valid)
+            {
+                p1 = h1.worldPos;
+                lastP1 = p1;
+                lastNorm1 = h1.normal;
+                hasP1 = true;
+            }
+            else
+            {
+                Vector cand1 = bd->SW_Reference(currS1x, currS1y, lastP1);
+                SnapResult pr1 = m_snapper.ProjectPointAlongNormal(target, cand1, lastNorm1, 500.0);
+                if (pr1.valid) { p1 = pr1.worldPos; hasP1 = true; }
+            }
+        }
+
+        if (!hasP0 && bd)
+        {
+            p0 = bd->SW_Reference(currS0x, currS0y, initP0);
+            hasP0 = true;
+        }
+        if (!hasP1 && bd)
+        {
+            p1 = bd->SW_Reference(currS1x, currS1y, initP1);
+            hasP1 = true;
+        }
+
+        if (!isDragging)
+        {
+            Float distSoFar = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+            if (distSoFar < DRAG_THRESHOLD)
+                continue;
+
+            isDragging = true;
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+
+            ExtrudeEdgeResult extRes = m_builder.ExtrudeEdge(retopo, v0, v1, p0, p1, targetNorm);
+            if (!extRes.valid)
+            {
+                doc->EndUndo();
+                doc->DoUndo(true);
+                break;
+            }
+
+            newV0 = extRes.newV0;
+            newV1 = extRes.newV1;
+            newPoly = extRes.newPoly;
+
+            m_activeDragMode = TweakMode::Edge;
+            m_dragEdgeV0 = newV0;
+            m_dragEdgeV1 = newV1;
+        }
+
+        if (isDragging && newV0 != NOTOK && newV1 != NOTOK)
+        {
+            weldTarget0 = NOTOK;
+            weldTarget1 = NOTOK;
+            m_weldTargetIdx = NOTOK;
+            m_weldTargetIdx2 = NOTOK;
+
+            // Check weld target for newV0
+            Vector curScreen0 = bd->WS(p0);
+            Int32 candWeld0 = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen0.x, curScreen0.y, 12.0, newV0, target);
+            if (candWeld0 != NOTOK && candWeld0 != v0 && candWeld0 != v1 && candWeld0 != newV1 && candWeld0 != newV0 &&
+                m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld0))
+            {
+                Vector targetPos0 = retopo->GetMg() * retopo->GetPointR()[candWeld0];
+                Vector targetScreen0 = bd->WS(targetPos0);
+                Float maxDepthDiff0 = maxon::Max(Float(6.0), Float(curScreen0.z * 0.015));
+                if (std::abs(targetScreen0.z - curScreen0.z) <= maxDepthDiff0)
+                {
+                    weldTarget0 = candWeld0;
+                    p0 = targetPos0;
+                }
+            }
+
+            // Check weld target for newV1
+            Vector curScreen1 = bd->WS(p1);
+            Int32 candWeld1 = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen1.x, curScreen1.y, 12.0, newV1, target);
+            if (candWeld1 != NOTOK && candWeld1 != v0 && candWeld1 != v1 && candWeld1 != newV0 && candWeld1 != newV1 && candWeld1 != weldTarget0 &&
+                m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld1))
+            {
+                Vector targetPos1 = retopo->GetMg() * retopo->GetPointR()[candWeld1];
+                Vector targetScreen1 = bd->WS(targetPos1);
+                Float maxDepthDiff1 = maxon::Max(Float(6.0), Float(curScreen1.z * 0.015));
+                if (std::abs(targetScreen1.z - curScreen1.z) <= maxDepthDiff1)
+                {
+                    weldTarget1 = candWeld1;
+                    p1 = targetPos1;
+                }
+            }
+
+            m_builder.SetVertexPosition(retopo, newV0, p0);
+            m_builder.SetVertexPosition(retopo, newV1, p1);
+
+            m_weldTargetIdx = weldTarget0;
+            m_weldTargetIdx2 = weldTarget1;
+
+            if (weldTarget0 != NOTOK || weldTarget1 != NOTOK)
+                StatusSetText("QuadDraw: Extruding edge (Release to weld into target vertex)"_s);
+            else
+                StatusSetText(FormatString("QuadDraw: Extruding edge (#@ - #@)"_s, v0, v1));
+
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        }
+    }
+
+    MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+
+    if (isDragging)
+    {
+        if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+        {
+            doc->DoUndo(true);
+        }
+        else
+        {
+            Int32 finalV0 = newV0;
+            Int32 finalV1 = newV1;
+
+            // Weld newV1 first (since newV1 > newV0, deleting newV1 doesn't shift newV0)
+            if (weldTarget1 != NOTOK && weldTarget1 != newV1)
+            {
+                m_builder.WeldVertices(retopo, newV1, weldTarget1);
+                finalV1 = (weldTarget1 > newV1) ? (weldTarget1 - 1) : weldTarget1;
+                if (weldTarget0 > newV1)
+                    weldTarget0--;
+                if (finalV0 > newV1)
+                    finalV0--;
+            }
+
+            // Weld newV0 second
+            if (weldTarget0 != NOTOK && weldTarget0 != finalV0)
+            {
+                m_builder.WeldVertices(retopo, finalV0, weldTarget0);
+                finalV0 = (weldTarget0 > finalV0) ? (weldTarget0 - 1) : weldTarget0;
+                if (finalV1 > finalV0)
+                    finalV1--;
+            }
+
+            StatusSetText("QuadDraw: Edge extruded."_s);
+            doc->EndUndo();
+            EventAdd();
+
+            // Keep the new outer edge highlighted
+            if (finalV0 >= 0 && finalV0 < retopo->GetPointCount() &&
+                finalV1 >= 0 && finalV1 < retopo->GetPointCount() && finalV0 != finalV1)
+            {
+                m_hoverTweak.mode = TweakMode::Edge;
+                m_hoverTweak.edgeV0 = finalV0;
+                m_hoverTweak.edgeV1 = finalV1;
+                m_hoverTweak.edgeWorld0 = retopo->GetMg() * retopo->GetPointR()[finalV0];
+                m_hoverTweak.edgeWorld1 = retopo->GetMg() * retopo->GetPointR()[finalV1];
+            }
+            else
+            {
+                m_hoverTweak.mode = TweakMode::None;
+            }
+        }
+    }
+
+    m_cursorX = mx + totalDx;
+    m_cursorY = my + totalDy;
+    m_dragEdgeV0 = NOTOK;
+    m_dragEdgeV1 = NOTOK;
+    m_weldTargetIdx = NOTOK;
+    m_weldTargetIdx2 = NOTOK;
+    m_activeDragMode = TweakMode::None;
     DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
     return true;
 }
@@ -990,8 +1316,49 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         return true;
     }
 
-    if (channel != BFM_INPUT_MOUSELEFT)
+    // =========================================================================
+    // ACTION 0B: MMB -> EXTRUDE HIGHLIGHTED/SELECTED BORDER EDGE
+    // =========================================================================
+    if (channel == BFM_INPUT_MOUSEMIDDLE && !shiftPressed)
+    {
+        PolygonObject* retopo = GetEditableMesh(doc, true);
+        if (!retopo) return false;
+        PolygonObject* target = GetTargetMesh(doc, retopo);
+
+        Int32 edgeV0 = NOTOK;
+        Int32 edgeV1 = NOTOK;
+
+        if (m_hoverTweak.mode == TweakMode::Edge)
+        {
+            edgeV0 = m_hoverTweak.edgeV0;
+            edgeV1 = m_hoverTweak.edgeV1;
+        }
+
+        if (edgeV0 == NOTOK || edgeV1 == NOTOK)
+        {
+            EdgeHit nearEdge = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 30.0, target);
+            if (nearEdge.valid)
+            {
+                edgeV0 = nearEdge.v0;
+                edgeV1 = nearEdge.v1;
+            }
+        }
+
+        if (edgeV0 != NOTOK && edgeV1 != NOTOK)
+        {
+            return DoExtrudeEdgeDrag(doc, data, bd, win, retopo, target, edgeV0, edgeV1, mx, my, KEY_MMIDDLE);
+        }
+
+        BaseContainer device;
+        win->MouseDragStart(KEY_MMIDDLE, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+        Float dx, dy;
+        while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE) {}
+        win->MouseDragEnd();
         return true;
+    }
+
+    if (channel != BFM_INPUT_MOUSELEFT)
+        return false;
 
     PolygonObject* retopo = GetEditableMesh(doc, true);
     if (!retopo) return false;
@@ -1582,11 +1949,38 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         return true;
     }
 
+    // Check if edge is hovered in m_hoverTweak if hitEdge wasn't directly found
+    if (!hitEdge.valid && hitV == NOTOK && m_hoverTweak.mode == TweakMode::Edge)
+    {
+        hitEdge.valid = true;
+        hitEdge.v0 = m_hoverTweak.edgeV0;
+        hitEdge.v1 = m_hoverTweak.edgeV1;
+    }
+
     // Priority 2: Edge Drag
     if (hitEdge.valid)
     {
         Int32 v0 = hitEdge.v0;
         Int32 v1 = hitEdge.v1;
+
+        // Check if Extrude Border Edge on LMB Drag is enabled
+        Bool extrudeLMB = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+        if (extrudeLMB)
+        {
+            Int32 polyCount = retopo->GetPolygonCount();
+            const CPolygon* oldPolys = retopo->GetPolygonR();
+            Int32 edgePolyCount = 0;
+            for (Int32 i = 0; i < polyCount; ++i)
+            {
+                if (PolygonHasEdge(oldPolys[i], v0, v1))
+                    edgePolyCount++;
+            }
+
+            if (edgePolyCount < 2)
+            {
+                return DoExtrudeEdgeDrag(doc, data, bd, win, retopo, target, v0, v1, mx, my, KEY_MLEFT);
+            }
+        }
         Vector initP0 = retopo->GetMg() * retopo->GetPointR()[v0];
         Vector initP1 = retopo->GetMg() * retopo->GetPointR()[v1];
         Vector s0 = bd->WS(initP0);
@@ -2644,7 +3038,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
             Vector toCam = isOrtho ? orthoLook : (camPos - wPos).GetNormalized();
 
-            Bool isHighlightedOrInteracting = (m_weldTargetIdx == i) ||
+            Bool isHighlightedOrInteracting = (m_weldTargetIdx == i) || (m_weldTargetIdx2 == i) ||
                 (m_activeDragMode == TweakMode::Vertex && m_dragVertexIdx == i) ||
                 (m_activeDragMode == TweakMode::Edge && (m_dragEdgeV0 == i || m_dragEdgeV1 == i)) ||
                 (m_activeDragMode == TweakMode::Polygon && (m_dragPolyPts[0] == i || m_dragPolyPts[1] == i || m_dragPolyPts[2] == i || (m_dragPolyNumPts == 4 && m_dragPolyPts[3] == i))) ||
@@ -2662,7 +3056,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 }
             }
 
-            if (m_weldTargetIdx == i)
+            if (m_weldTargetIdx == i || m_weldTargetIdx2 == i)
             {
                 // Weld target in bright red
                 drawPoint(wPos, Vector(1.0, 0.2, 0.2), pointSize + 2.0, disableXRay, toCam);
@@ -2745,6 +3139,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_dragPolyIdx = NOTOK;
         m_dragPolyNumPts = 0;
         m_weldTargetIdx = NOTOK;
+        m_weldTargetIdx2 = NOTOK;
         m_isResizingBrush = false;
         m_isRelaxDragging = false;
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -2762,7 +3157,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- LMB: Click on surface to drop points\n- LMB Drag: Move/tweak vertex (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Preview Cut / Insert Edge Loop (Maya-style)\n- Ctrl + LMB: Insert Edge Loop / Cut edges (drag to slide, Esc to cancel)\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- LMB: Click on surface to drop points\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Preview Cut / Insert Edge Loop (Maya-style)\n- Ctrl + LMB: Insert Edge Loop / Cut edges (drag to slide, Esc to cancel)\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }
