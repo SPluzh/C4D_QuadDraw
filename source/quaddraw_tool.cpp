@@ -1270,19 +1270,6 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // ==========================================
     // ACTION 4: NORMAL LMB -> TWEAK (DRAG VERTEX / EDGE / POLYGON) OR PLACE POINT
     // ==========================================
-    auto snapPointToSurface = [&](const Vector& pt, const Vector& norm) -> Vector {
-        if (!target) return pt;
-        SnapResult sr = m_snapper.ProjectPointAlongNormal(target, pt, norm, 1000.0);
-        if (sr.valid) return sr.worldPos;
-        Vector sPt = bd->WS(pt);
-        if (sPt.z > 0.0)
-        {
-            SnapResult raySnap = m_snapper.RaycastSurface(bd, target, sPt.x, sPt.y);
-            if (raySnap.valid) return raySnap.worldPos;
-        }
-        return pt;
-    };
-
     Float polyZ = 1e30;
     Int32 underPoly = (retopo && retopo->GetPolygonCount() > 0)
         ? m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper, &polyZ) : NOTOK;
@@ -1340,50 +1327,84 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         }
     }
 
+    // Priority 1: Vertex Drag
     if (hitV != NOTOK)
     {
         Vector initVertexPos = retopo->GetMg() * retopo->GetPointR()[hitV];
-
-        m_activeDragMode = TweakMode::Vertex;
-        m_dragVertexIdx = hitV;
-        m_weldTargetIdx = NOTOK;
-
-        doc->StartUndo();
-        doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+        Vector vScreen = bd->WS(initVertexPos);
+        if (vScreen.z <= 0.0) return true;
 
         BaseContainer device;
         win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE | MOUSEDRAGFLAGS::NOMOVE);
 
         Float dx, dy;
-        Bool hasMoved = false;
+        Float totalDx = 0.0, totalDy = 0.0;
+        Bool isDragging = false;
+        Vector lastValidPos = initVertexPos;
+        Vector lastValidNorm(0.0, 1.0, 0.0);
 
         while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
         {
             if (dx == 0.0 && dy == 0.0) continue;
-            hasMoved = true;
-            mx += dx;
-            my += dy;
+            totalDx += dx;
+            totalDy += dy;
 
-            Vector movePos;
-            Bool hasMovePos = false;
-            if (target)
+            if (!isDragging)
             {
-                SnapResult surfaceHit = m_snapper.RaycastSurface(bd, target, mx, my);
-                if (surfaceHit.valid)
+                isDragging = true;
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_activeDragMode = TweakMode::Vertex;
+                m_dragVertexIdx = hitV;
+                m_weldTargetIdx = NOTOK;
+            }
+
+            Vector movePos = initVertexPos;
+            Bool hasMovePos = false;
+
+            if (totalDx == 0.0 && totalDy == 0.0)
+            {
+                movePos = initVertexPos;
+                hasMovePos = true;
+            }
+            else
+            {
+                Float currVx = vScreen.x + totalDx;
+                Float currVy = vScreen.y + totalDy;
+
+                if (target)
                 {
-                    movePos = surfaceHit.worldPos;
+                    SnapResult surfaceHit = m_snapper.RaycastSurface(bd, target, currVx, currVy);
+                    if (surfaceHit.valid)
+                    {
+                        movePos = surfaceHit.worldPos;
+                        lastValidPos = movePos;
+                        lastValidNorm = surfaceHit.normal;
+                        hasMovePos = true;
+                    }
+                    else
+                    {
+                        Vector candidate = bd->SW_Reference(currVx, currVy, lastValidPos);
+                        SnapResult proj = m_snapper.ProjectPointAlongNormal(target, candidate, lastValidNorm, 500.0);
+                        if (proj.valid)
+                        {
+                            movePos = proj.worldPos;
+                            hasMovePos = true;
+                        }
+                    }
+                }
+
+                if (!hasMovePos && bd)
+                {
+                    movePos = bd->SW_Reference(currVx, currVy, initVertexPos);
                     hasMovePos = true;
                 }
-            }
-            else if (bd)
-            {
-                movePos = bd->SW_Reference(mx, my, initVertexPos);
-                hasMovePos = true;
             }
 
             if (hasMovePos)
             {
-                Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 12.0, hitV, target);
+                Vector curScreen = bd->WS(movePos);
+                Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 12.0, hitV, target);
                 if (weldTarget != NOTOK)
                 {
                     m_weldTargetIdx = weldTarget;
@@ -1402,26 +1423,32 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         }
 
         MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
-        if (dragResult == MOUSEDRAGRESULT::ESCAPE || !hasMoved)
+        Float totalDist = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+
+        if (isDragging)
         {
-            doc->DoUndo(true);
-        }
-        else if (m_weldTargetIdx != NOTOK && m_weldTargetIdx != hitV)
-        {
-            m_builder.WeldVertices(retopo, hitV, m_weldTargetIdx);
-            StatusSetText("QuadDraw: Vertices welded!"_s);
-            doc->EndUndo();
-        }
-        else
-        {
-            StatusSetText(FormatString("QuadDraw: Vertex #@ moved."_s, hitV));
-            doc->EndUndo();
+            if (dragResult == MOUSEDRAGRESULT::ESCAPE || totalDist < 1.5)
+            {
+                doc->DoUndo(true);
+            }
+            else if (m_weldTargetIdx != NOTOK && m_weldTargetIdx != hitV)
+            {
+                m_builder.WeldVertices(retopo, hitV, m_weldTargetIdx);
+                StatusSetText("QuadDraw: Vertices welded!"_s);
+                doc->EndUndo();
+                EventAdd();
+            }
+            else
+            {
+                StatusSetText(FormatString("QuadDraw: Vertex #@ moved."_s, hitV));
+                doc->EndUndo();
+                EventAdd();
+            }
         }
 
         m_dragVertexIdx = NOTOK;
         m_weldTargetIdx = NOTOK;
         m_activeDragMode = TweakMode::None;
-        EventAdd();
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -1433,78 +1460,126 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         Int32 v1 = hitEdge.v1;
         Vector initP0 = retopo->GetMg() * retopo->GetPointR()[v0];
         Vector initP1 = retopo->GetMg() * retopo->GetPointR()[v1];
-        Vector initMid = (initP0 + initP1) * 0.5;
-
-        SnapResult initialHit;
-        if (target) initialHit = m_snapper.RaycastSurface(bd, target, mx, my);
-        Vector initialHitPos = initialHit.valid ? initialHit.worldPos : initMid;
-
-        m_activeDragMode = TweakMode::Edge;
-        m_dragEdgeV0 = v0;
-        m_dragEdgeV1 = v1;
-
-        doc->StartUndo();
-        doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+        Vector s0 = bd->WS(initP0);
+        Vector s1 = bd->WS(initP1);
+        if (s0.z <= 0.0 || s1.z <= 0.0) return true;
 
         BaseContainer device;
         win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE | MOUSEDRAGFLAGS::NOMOVE);
 
         Float dx, dy;
-        Bool hasMoved = false;
+        Float totalDx = 0.0, totalDy = 0.0;
+        Bool isDragging = false;
+        Vector lastP0 = initP0, lastP1 = initP1;
+        Vector lastNorm0(0.0, 1.0, 0.0), lastNorm1(0.0, 1.0, 0.0);
 
         while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
         {
             if (dx == 0.0 && dy == 0.0) continue;
-            hasMoved = true;
-            mx += dx;
-            my += dy;
+            totalDx += dx;
+            totalDy += dy;
 
-            Bool canMove = false;
-            if (target)
+            if (!isDragging)
             {
-                SnapResult currHit = m_snapper.RaycastSurface(bd, target, mx, my);
-                if (currHit.valid)
-                {
-                    Vector delta = currHit.worldPos - initialHitPos;
-                    Vector p0 = snapPointToSurface(initP0 + delta, currHit.normal);
-                    Vector p1 = snapPointToSurface(initP1 + delta, currHit.normal);
+                isDragging = true;
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_activeDragMode = TweakMode::Edge;
+                m_dragEdgeV0 = v0;
+                m_dragEdgeV1 = v1;
+            }
 
-                    m_builder.SetVertexPosition(retopo, v0, p0);
-                    m_builder.SetVertexPosition(retopo, v1, p1);
-                    canMove = true;
+            Vector p0 = initP0, p1 = initP1;
+            Bool hasP0 = false, hasP1 = false;
+
+            if (totalDx == 0.0 && totalDy == 0.0)
+            {
+                p0 = initP0;
+                p1 = initP1;
+                hasP0 = true;
+                hasP1 = true;
+            }
+            else
+            {
+                Float currS0x = s0.x + totalDx;
+                Float currS0y = s0.y + totalDy;
+                Float currS1x = s1.x + totalDx;
+                Float currS1y = s1.y + totalDy;
+
+                if (target)
+                {
+                    SnapResult h0 = m_snapper.RaycastSurface(bd, target, currS0x, currS0y);
+                    if (h0.valid)
+                    {
+                        p0 = h0.worldPos;
+                        lastP0 = p0;
+                        lastNorm0 = h0.normal;
+                        hasP0 = true;
+                    }
+                    else
+                    {
+                        Vector cand0 = bd->SW_Reference(currS0x, currS0y, lastP0);
+                        SnapResult pr0 = m_snapper.ProjectPointAlongNormal(target, cand0, lastNorm0, 500.0);
+                        if (pr0.valid) { p0 = pr0.worldPos; hasP0 = true; }
+                    }
+
+                    SnapResult h1 = m_snapper.RaycastSurface(bd, target, currS1x, currS1y);
+                    if (h1.valid)
+                    {
+                        p1 = h1.worldPos;
+                        lastP1 = p1;
+                        lastNorm1 = h1.normal;
+                        hasP1 = true;
+                    }
+                    else
+                    {
+                        Vector cand1 = bd->SW_Reference(currS1x, currS1y, lastP1);
+                        SnapResult pr1 = m_snapper.ProjectPointAlongNormal(target, cand1, lastNorm1, 500.0);
+                        if (pr1.valid) { p1 = pr1.worldPos; hasP1 = true; }
+                    }
+                }
+
+                if (!hasP0 && bd)
+                {
+                    p0 = bd->SW_Reference(currS0x, currS0y, initP0);
+                    hasP0 = true;
+                }
+                if (!hasP1 && bd)
+                {
+                    p1 = bd->SW_Reference(currS1x, currS1y, initP1);
+                    hasP1 = true;
                 }
             }
-            else if (bd)
-            {
-                Vector currWorld = bd->SW_Reference(mx, my, initMid);
-                Vector delta = currWorld - initMid;
-                m_builder.SetVertexPosition(retopo, v0, initP0 + delta);
-                m_builder.SetVertexPosition(retopo, v1, initP1 + delta);
-                canMove = true;
-            }
 
-            if (canMove)
+            if (hasP0 && hasP1)
             {
+                m_builder.SetVertexPosition(retopo, v0, p0);
+                m_builder.SetVertexPosition(retopo, v1, p1);
                 StatusSetText(FormatString("QuadDraw: Moving edge (#@ - #@)"_s, v0, v1));
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             }
         }
 
         MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
-        if (dragResult == MOUSEDRAGRESULT::ESCAPE || !hasMoved)
+        Float totalDist = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+
+        if (isDragging)
         {
-            doc->DoUndo(true);
-        }
-        else
-        {
-            StatusSetText(FormatString("QuadDraw: Edge (#@ - #@) moved."_s, v0, v1));
-            doc->EndUndo();
+            if (dragResult == MOUSEDRAGRESULT::ESCAPE || totalDist < 1.5)
+            {
+                doc->DoUndo(true);
+            }
+            else
+            {
+                StatusSetText(FormatString("QuadDraw: Edge (#@ - #@) moved."_s, v0, v1));
+                doc->EndUndo();
+                EventAdd();
+            }
         }
 
         m_dragEdgeV0 = NOTOK;
         m_dragEdgeV1 = NOTOK;
         m_activeDragMode = TweakMode::None;
-        EventAdd();
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -1515,89 +1590,130 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         const CPolygon& p = retopo->GetPolygonR()[hitPoly];
         Int32 numPts = (p.c != p.d) ? 4 : 3;
         Int32 polyPts[4] = { p.a, p.b, p.c, p.d };
-        m_dragPolyNumPts = numPts;
-        for (Int32 k = 0; k < 4; ++k) m_dragPolyPts[k] = polyPts[k];
 
         Vector initPts[4];
-        Vector center(0.0);
+        Vector sPts[4];
+        Vector lastPts[4];
+        Vector lastNorms[4];
+        Bool allVisible = true;
         for (Int32 k = 0; k < numPts; ++k)
         {
             initPts[k] = retopo->GetMg() * retopo->GetPointR()[polyPts[k]];
-            center += initPts[k];
+            lastPts[k] = initPts[k];
+            lastNorms[k] = Vector(0.0, 1.0, 0.0);
+            sPts[k] = bd->WS(initPts[k]);
+            if (sPts[k].z <= 0.0) allVisible = false;
         }
-        center = center * (1.0 / Float(numPts));
-
-        SnapResult initialHit;
-        if (target) initialHit = m_snapper.RaycastSurface(bd, target, mx, my);
-        Vector initialHitPos = initialHit.valid ? initialHit.worldPos : center;
-
-        m_activeDragMode = TweakMode::Polygon;
-        m_dragPolyIdx = hitPoly;
-
-        doc->StartUndo();
-        doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+        if (!allVisible) return true;
 
         BaseContainer device;
         win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE | MOUSEDRAGFLAGS::NOMOVE);
 
         Float dx, dy;
-        Bool hasMoved = false;
+        Float totalDx = 0.0, totalDy = 0.0;
+        Bool isDragging = false;
 
         while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
         {
             if (dx == 0.0 && dy == 0.0) continue;
-            hasMoved = true;
-            mx += dx;
-            my += dy;
+            totalDx += dx;
+            totalDy += dy;
 
-            Bool canMove = false;
-            if (target)
+            if (!isDragging)
             {
-                SnapResult currHit = m_snapper.RaycastSurface(bd, target, mx, my);
-                if (currHit.valid)
-                {
-                    Vector delta = currHit.worldPos - initialHitPos;
-                    for (Int32 k = 0; k < numPts; ++k)
-                    {
-                        Vector pk = snapPointToSurface(initPts[k] + delta, currHit.normal);
-                        m_builder.SetVertexPosition(retopo, polyPts[k], pk);
-                    }
-                    canMove = true;
-                }
+                isDragging = true;
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_activeDragMode = TweakMode::Polygon;
+                m_dragPolyIdx = hitPoly;
+                m_dragPolyNumPts = numPts;
+                for (Int32 k = 0; k < 4; ++k) m_dragPolyPts[k] = polyPts[k];
             }
-            else if (bd)
+
+            Vector newPts[4];
+            Bool allNewPtsValid = true;
+
+            if (totalDx == 0.0 && totalDy == 0.0)
             {
-                Vector currWorld = bd->SW_Reference(mx, my, center);
-                Vector delta = currWorld - center;
+                for (Int32 k = 0; k < numPts; ++k)
+                    newPts[k] = initPts[k];
+                allNewPtsValid = true;
+            }
+            else
+            {
                 for (Int32 k = 0; k < numPts; ++k)
                 {
-                    m_builder.SetVertexPosition(retopo, polyPts[k], initPts[k] + delta);
+                    Float currSx = sPts[k].x + totalDx;
+                    Float currSy = sPts[k].y + totalDy;
+
+                    Bool gotPt = false;
+                    if (target)
+                    {
+                        SnapResult hk = m_snapper.RaycastSurface(bd, target, currSx, currSy);
+                        if (hk.valid)
+                        {
+                            newPts[k] = hk.worldPos;
+                            lastPts[k] = newPts[k];
+                            lastNorms[k] = hk.normal;
+                            gotPt = true;
+                        }
+                        else
+                        {
+                            Vector cand = bd->SW_Reference(currSx, currSy, lastPts[k]);
+                            SnapResult pr = m_snapper.ProjectPointAlongNormal(target, cand, lastNorms[k], 500.0);
+                            if (pr.valid)
+                            {
+                                newPts[k] = pr.worldPos;
+                                gotPt = true;
+                            }
+                        }
+                    }
+
+                    if (!gotPt && bd)
+                    {
+                        newPts[k] = bd->SW_Reference(currSx, currSy, initPts[k]);
+                        gotPt = true;
+                    }
+
+                    if (!gotPt)
+                    {
+                        allNewPtsValid = false;
+                        break;
+                    }
                 }
-                canMove = true;
             }
 
-            if (canMove)
+            if (allNewPtsValid)
             {
+                for (Int32 k = 0; k < numPts; ++k)
+                {
+                    m_builder.SetVertexPosition(retopo, polyPts[k], newPts[k]);
+                }
                 StatusSetText(FormatString("QuadDraw: Moving polygon #@"_s, hitPoly));
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             }
         }
 
         MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
-        if (dragResult == MOUSEDRAGRESULT::ESCAPE || !hasMoved)
+        Float totalDist = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+
+        if (isDragging)
         {
-            doc->DoUndo(true);
-        }
-        else
-        {
-            StatusSetText(FormatString("QuadDraw: Polygon #@ moved."_s, hitPoly));
-            doc->EndUndo();
+            if (dragResult == MOUSEDRAGRESULT::ESCAPE || totalDist < 1.5)
+            {
+                doc->DoUndo(true);
+            }
+            else
+            {
+                StatusSetText(FormatString("QuadDraw: Polygon #@ moved."_s, hitPoly));
+                doc->EndUndo();
+                EventAdd();
+            }
         }
 
         m_dragPolyIdx = NOTOK;
         m_dragPolyNumPts = 0;
         m_activeDragMode = TweakMode::None;
-        EventAdd();
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -1647,11 +1763,14 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE | MOUSEDRAGFLAGS::NOMOVE);
 
             Float dx, dy;
+            Float totalDx = 0.0, totalDy = 0.0;
             Bool hasMoved = false;
 
             while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
             {
                 if (dx == 0.0 && dy == 0.0) continue;
+                totalDx += dx;
+                totalDy += dy;
                 hasMoved = true;
                 mx += dx;
                 my += dy;
