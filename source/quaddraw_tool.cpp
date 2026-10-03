@@ -24,6 +24,10 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
     m_ctrlHeld = false;
     m_shiftQuadPreview.valid = false;
     m_edgeCutPreview.valid = false;
+    m_cachedCutV0 = NOTOK;
+    m_cachedCutV1 = NOTOK;
+    m_cachedCutT = -1.0;
+    m_cachedCutPoly = NOTOK;
     m_deleteHighlight.type = DeleteTargetType::None;
     m_hoverTweak.mode = TweakMode::None;
     m_activeDragMode = TweakMode::None;
@@ -466,16 +470,34 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 if (std::abs(hitT - 0.5) < 0.05)
                     hitT = 0.5;
 
-                m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, bd, hitV0, hitV1, hitT, hitPoly);
+                Bool sameEdge = (hitV0 == m_cachedCutV0 && hitV1 == m_cachedCutV1 && hitPoly == m_cachedCutPoly);
+                Bool sameT = sameEdge && (std::abs(hitT - m_cachedCutT) < 0.005);
+
+                if (!sameT || !m_edgeCutPreview.valid)
+                {
+                    m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, hitV0, hitV1, hitT, hitPoly);
+                    m_cachedCutV0 = hitV0;
+                    m_cachedCutV1 = hitV1;
+                    m_cachedCutT = hitT;
+                    m_cachedCutPoly = hitPoly;
+                }
             }
             else
             {
                 m_edgeCutPreview.valid = false;
+                m_cachedCutV0 = NOTOK;
+                m_cachedCutV1 = NOTOK;
+                m_cachedCutT = -1.0;
+                m_cachedCutPoly = NOTOK;
             }
         }
         else
         {
             m_edgeCutPreview.valid = false;
+            m_cachedCutV0 = NOTOK;
+            m_cachedCutV1 = NOTOK;
+            m_cachedCutT = -1.0;
+            m_cachedCutPoly = NOTOK;
         }
 
         bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
@@ -497,6 +519,10 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
     // Clear cut preview when not in Ctrl mode
     m_edgeCutPreview.valid = false;
+    m_cachedCutV0 = NOTOK;
+    m_cachedCutV1 = NOTOK;
+    m_cachedCutT = -1.0;
+    m_cachedCutPoly = NOTOK;
 
     // =========================================================================
     // MODE 3: SHIFT HELD (QUAD CREATION PREVIEW OR MAYA RELAX BRUSH)
@@ -880,7 +906,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             if (hitV0 != NOTOK && hitV1 != NOTOK)
             {
                 if (std::abs(hitT - 0.5) < 0.05) hitT = 0.5;
-                m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, bd, hitV0, hitV1, hitT, hitPoly);
+                m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, hitV0, hitV1, hitT, hitPoly);
             }
         }
 
@@ -900,10 +926,13 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 {
                     Float newT = m_builder.ComputeEdgeParam(bd, retopo, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, mx, my);
                     if (std::abs(newT - 0.5) < 0.04) newT = 0.5;
-                    m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, bd, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, newT, m_edgeCutPreview.primaryPoly);
-                    Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
-                    StatusSetText(FormatString("QuadDraw [CUT] | Sliding Edge Loop (@%)"_s, pct));
-                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    if (std::abs(newT - m_edgeCutPreview.paramT) > 0.003)
+                    {
+                        m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, newT, m_edgeCutPreview.primaryPoly);
+                        Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
+                        StatusSetText(FormatString("QuadDraw [CUT] | Sliding Edge Loop (@%)"_s, pct));
+                        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    }
                 }
             }
 
@@ -911,6 +940,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             if (dragResult == MOUSEDRAGRESULT::ESCAPE)
             {
                 m_edgeCutPreview.valid = false;
+                m_cachedCutV0 = NOTOK;
+                m_cachedCutV1 = NOTOK;
+                m_cachedCutT = -1.0;
+                m_cachedCutPoly = NOTOK;
                 StatusSetText("QuadDraw: Cut canceled."_s);
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
@@ -925,6 +958,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 StatusSetText(FormatString("QuadDraw: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
             }
             m_edgeCutPreview.valid = false;
+            m_cachedCutV0 = NOTOK;
+            m_cachedCutV1 = NOTOK;
+            m_cachedCutT = -1.0;
+            m_cachedCutPoly = NOTOK;
 
             doc->EndUndo();
             EventAdd();

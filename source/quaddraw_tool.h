@@ -57,6 +57,10 @@ private:
 
     // Ctrl Cut / Insert Edge Loop Preview (Maya style)
     EdgeCutResult  m_edgeCutPreview;
+    Int32          m_cachedCutV0 = NOTOK;
+    Int32          m_cachedCutV1 = NOTOK;
+    Float          m_cachedCutT = -1.0;
+    Int32          m_cachedCutPoly = NOTOK;
 
     // Delete Highlight (Ctrl+Shift / Ctrl mode)
     enum class DeleteTargetType

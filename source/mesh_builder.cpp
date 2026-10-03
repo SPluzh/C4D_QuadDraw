@@ -1705,7 +1705,7 @@ EdgeHit MeshBuilder::FindClosestEdgeOfPolygon(BaseDraw* bd, PolygonObject* mesh,
     return hit;
 }
 
-EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject* targetMesh, BaseDraw* bd, Int32 startV0, Int32 startV1, Float startT, Int32 hintPoly)
+EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, BaseDraw* bd, Int32 startV0, Int32 startV1, Float startT, Int32 hintPoly)
 {
     EdgeCutResult res;
     if (!retopo || startV0 == startV1 || startV0 < 0 || startV1 < 0) return res;
@@ -1724,7 +1724,9 @@ EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject*
     res.paramT = startT;
     res.primaryPoly = hintPoly;
 
-    SurfaceSnapper snapper;
+    Neighbor neighbor;
+    if (!neighbor.Init(ptCount, polys, polyCount, nullptr))
+        return res;
 
     auto getOrCreateCutPoint = [&](Int32 u, Int32 v, Float paramUtoV) -> Int32 {
         Int32 uMin = (u < v) ? u : v;
@@ -1754,39 +1756,36 @@ EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject*
             // Compute surface normal along edge (uMin, vMax) at parameter tNorm
             Vector edgeNormal(0.0);
 
-            // Accumulate face normals of polygons sharing edge (uMin, vMax)
-            for (Int32 pi = 0; pi < polyCount; ++pi)
-            {
+            auto addFaceNormal = [&](Int32 pi) {
+                if (pi == NOTOK || pi < 0 || pi >= polyCount) return;
                 const CPolygon& poly = polys[pi];
-                if (PolygonHasEdge(poly, uMin, vMax))
-                {
-                    Vector pa = mg * pts[poly.a];
-                    Vector pb = mg * pts[poly.b];
-                    Vector pc = mg * pts[poly.c];
-                    Vector fn = Cross(pb - pa, pc - pa);
-                    Float fnLen = fn.GetLength();
-                    if (fnLen > 1e-4)
-                        edgeNormal += fn / fnLen;
-                }
-            }
+                Vector pa = mg * pts[poly.a];
+                Vector pb = mg * pts[poly.b];
+                Vector pc = mg * pts[poly.c];
+                Vector fn = Cross(pb - pa, pc - pa);
+                Float fnLen = fn.GetLength();
+                if (fnLen > 1e-4)
+                    edgeNormal += fn / fnLen;
+            };
 
-            // If edge normal is zero, accumulate face normals of polygons sharing uMin or vMax
+            // Accumulate face normals of polygons sharing edge (uMin, vMax) in O(1)
+            Int32 epA = NOTOK, epB = NOTOK;
+            neighbor.GetEdgePolys(uMin, vMax, &epA, &epB);
+            addFaceNormal(epA);
+            addFaceNormal(epB);
+
+            // If edge normal is zero, accumulate face normals of polygons sharing uMin or vMax in O(1)
             if (edgeNormal.GetLength() < 1e-4)
             {
-                for (Int32 pi = 0; pi < polyCount; ++pi)
-                {
-                    const CPolygon& poly = polys[pi];
-                    if (PolygonHasVertex(poly, uMin) || PolygonHasVertex(poly, vMax))
-                    {
-                        Vector pa = mg * pts[poly.a];
-                        Vector pb = mg * pts[poly.b];
-                        Vector pc = mg * pts[poly.c];
-                        Vector fn = Cross(pb - pa, pc - pa);
-                        Float fnLen = fn.GetLength();
-                        if (fnLen > 1e-4)
-                            edgeNormal += fn / fnLen;
-                    }
-                }
+                Int32* dadr = nullptr;
+                Int32 dcnt = 0;
+                neighbor.GetPointPolys(uMin, &dadr, &dcnt);
+                for (Int32 i = 0; i < dcnt; ++i)
+                    addFaceNormal(dadr[i]);
+
+                neighbor.GetPointPolys(vMax, &dadr, &dcnt);
+                for (Int32 i = 0; i < dcnt; ++i)
+                    addFaceNormal(dadr[i]);
             }
 
             Float normLen = edgeNormal.GetLength();
@@ -1809,15 +1808,11 @@ EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject*
         return idx;
     };
 
-    // Find all polygons containing edge (startV0, startV1)
-    maxon::BaseArray<Int32> sharing;
-    for (Int32 i = 0; i < polyCount; ++i)
-    {
-        if (PolygonHasEdge(polys[i], startV0, startV1))
-            sharing.Append(i) iferr_ignore("Append sharing");
-    }
+    // Find polygons containing edge (startV0, startV1) in O(1)
+    Int32 polyA = NOTOK, polyB = NOTOK;
+    neighbor.GetEdgePolys(startV0, startV1, &polyA, &polyB);
 
-    if (sharing.GetCount() == 0)
+    if (polyA == NOTOK && polyB == NOTOK)
     {
         // Standalone edge: just cut this edge
         Int32 cp = getOrCreateCutPoint(startV0, startV1, startT);
@@ -1828,8 +1823,12 @@ EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject*
         return res;
     }
 
-    Int32 polyA = sharing[0];
-    Int32 polyB = (sharing.GetCount() > 1) ? sharing[1] : NOTOK;
+    if (polyA == NOTOK)
+    {
+        polyA = polyB;
+        polyB = NOTOK;
+    }
+
     if (hintPoly != NOTOK)
     {
         if (polyB == hintPoly)
@@ -1925,18 +1924,12 @@ EdgeCutResult MeshBuilder::FindEdgeLoopCut(PolygonObject* retopo, PolygonObject*
                 Int32 nextV = q2;
                 Float nextT = tA;
 
-                // Find next neighbor sharing edge {nextU, nextV}
-                Int32 nextPoly = NOTOK;
-                for (Int32 ni = 0; ni < polyCount; ++ni)
-                {
-                    if (ni != currPoly && PolygonHasEdge(polys[ni], nextU, nextV))
-                    {
-                        nextPoly = ni;
-                        break;
-                    }
-                }
+                // Find next neighbor sharing edge {nextU, nextV} in O(1)
+                Int32 pFirst = NOTOK, pSecond = NOTOK;
+                neighbor.GetEdgePolys(nextU, nextV, &pFirst, &pSecond);
+                Int32 nextPoly = (pFirst != currPoly) ? pFirst : pSecond;
 
-                if (nextPoly == NOTOK) break; // Reached boundary
+                if (nextPoly == NOTOK || nextPoly < 0 || nextPoly >= polyCount) break; // Reached boundary
 
                 currPoly = nextPoly;
                 currU = nextU;

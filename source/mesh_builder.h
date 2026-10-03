@@ -129,7 +129,7 @@ public:
     EdgeHit FindClosestEdgeOfPolygon(BaseDraw* bd, PolygonObject* mesh, Int32 polyIdx, Float screenX, Float screenY);
 
     // Trace an edge loop cut across quad rings perpendicular to start edge
-    EdgeCutResult FindEdgeLoopCut(PolygonObject* retopo, PolygonObject* targetMesh, BaseDraw* bd, Int32 startV0, Int32 startV1, Float startT, Int32 hintPoly = NOTOK);
+    EdgeCutResult FindEdgeLoopCut(PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, BaseDraw* bd, Int32 startV0, Int32 startV1, Float startT, Int32 hintPoly = NOTOK);
 
     // Apply the edge loop cut to the retopo mesh, splitting quads and inserting new vertices
     Bool ApplyEdgeLoopCut(PolygonObject* retopo, const EdgeCutResult& cutResult);
