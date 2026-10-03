@@ -1537,19 +1537,30 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             }
             else if (m_weldTargetIdx != NOTOK && m_weldTargetIdx != hitV)
             {
+                Int32 targetV = m_weldTargetIdx;
+                if (targetV > hitV)
+                    targetV--;
                 m_builder.WeldVertices(retopo, hitV, m_weldTargetIdx);
                 StatusSetText("QuadDraw: Vertices welded!"_s);
                 doc->EndUndo();
                 EventAdd();
+
+                m_hoverTweak.mode = TweakMode::Vertex;
+                m_hoverTweak.index = targetV;
             }
             else
             {
                 StatusSetText(FormatString("QuadDraw: Vertex #@ moved."_s, hitV));
                 doc->EndUndo();
                 EventAdd();
+
+                m_hoverTweak.mode = TweakMode::Vertex;
+                m_hoverTweak.index = hitV;
             }
         }
 
+        m_cursorX = vScreen.x + totalDx;
+        m_cursorY = vScreen.y + totalDy;
         m_dragVertexIdx = NOTOK;
         m_weldTargetIdx = NOTOK;
         m_activeDragMode = TweakMode::None;
@@ -1678,9 +1689,17 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 StatusSetText(FormatString("QuadDraw: Edge (#@ - #@) moved."_s, v0, v1));
                 doc->EndUndo();
                 EventAdd();
+
+                m_hoverTweak.mode = TweakMode::Edge;
+                m_hoverTweak.edgeV0 = v0;
+                m_hoverTweak.edgeV1 = v1;
+                m_hoverTweak.edgeWorld0 = retopo->GetMg() * retopo->GetPointR()[v0];
+                m_hoverTweak.edgeWorld1 = retopo->GetMg() * retopo->GetPointR()[v1];
             }
         }
 
+        m_cursorX = mx + totalDx;
+        m_cursorY = my + totalDy;
         m_dragEdgeV0 = NOTOK;
         m_dragEdgeV1 = NOTOK;
         m_activeDragMode = TweakMode::None;
@@ -1812,9 +1831,21 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 StatusSetText(FormatString("QuadDraw: Polygon #@ moved."_s, hitPoly));
                 doc->EndUndo();
                 EventAdd();
+
+                m_hoverTweak.mode = TweakMode::Polygon;
+                m_hoverTweak.index = hitPoly;
+                m_hoverTweak.polyIsQuad = (numPts == 4);
+                m_hoverTweak.polyPts[0] = polyPts[0];
+                m_hoverTweak.polyPts[1] = polyPts[1];
+                m_hoverTweak.polyPts[2] = polyPts[2];
+                m_hoverTweak.polyPts[3] = polyPts[3];
+                for (Int32 k = 0; k < numPts; ++k)
+                    m_hoverTweak.polyWorld[k] = retopo->GetMg() * retopo->GetPointR()[polyPts[k]];
             }
         }
 
+        m_cursorX = mx + totalDx;
+        m_cursorY = my + totalDy;
         m_dragPolyIdx = NOTOK;
         m_dragPolyNumPts = 0;
         m_activeDragMode = TweakMode::None;
@@ -1941,19 +1972,30 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             if (dragResult == MOUSEDRAGRESULT::ESCAPE)
             {
                 doc->DoUndo(true);
+                m_hoverTweak.mode = TweakMode::None;
             }
             else if (hasMoved && m_weldTargetIdx != NOTOK && m_weldTargetIdx != dragIdx)
             {
+                Int32 targetV = m_weldTargetIdx;
+                if (targetV > dragIdx)
+                    targetV--;
                 m_builder.WeldVertices(retopo, dragIdx, m_weldTargetIdx);
                 StatusSetText("QuadDraw: Vertices welded!"_s);
                 doc->EndUndo();
+                m_hoverTweak.mode = TweakMode::Vertex;
+                m_hoverTweak.index = targetV;
             }
             else
             {
                 StatusSetText(FormatString("QuadDraw: Point #@ placed."_s, dragIdx));
                 doc->EndUndo();
+                m_hoverTweak.mode = TweakMode::Vertex;
+                m_hoverTweak.index = dragIdx;
             }
 
+            m_hoverSnap.valid = false;
+            m_cursorX = mx;
+            m_cursorY = my;
             m_dragVertexIdx = NOTOK;
             m_weldTargetIdx = NOTOK;
             m_activeDragMode = TweakMode::None;
@@ -2271,35 +2313,72 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     {
         if (m_hoverTweak.mode == TweakMode::Edge)
         {
+            Vector w0 = m_hoverTweak.edgeWorld0;
+            Vector w1 = m_hoverTweak.edgeWorld1;
+            if (retopo && m_hoverTweak.edgeV0 >= 0 && m_hoverTweak.edgeV0 < retopo->GetPointCount() &&
+                m_hoverTweak.edgeV1 >= 0 && m_hoverTweak.edgeV1 < retopo->GetPointCount())
+            {
+                Matrix rMg = retopo->GetMg();
+                const Vector* rPts = retopo->GetPointR();
+                w0 = rMg * rPts[m_hoverTweak.edgeV0];
+                w1 = rMg * rPts[m_hoverTweak.edgeV1];
+            }
+
             bd->SetTransparency(0);
             bd->SetPen(highlightColor);
-            drawThickLine(m_hoverTweak.edgeWorld0, m_hoverTweak.edgeWorld1, hoverLineWidth);
-            drawPoint(m_hoverTweak.edgeWorld0, highlightColor, pointSize + 2.0);
-            drawPoint(m_hoverTweak.edgeWorld1, highlightColor, pointSize + 2.0);
+            drawThickLine(w0, w1, hoverLineWidth);
+            drawPoint(w0, highlightColor, pointSize + 2.0);
+            drawPoint(w1, highlightColor, pointSize + 2.0);
         }
         else if (m_hoverTweak.mode == TweakMode::Polygon)
         {
+            Int32 numPts = m_hoverTweak.polyIsQuad ? 4 : 3;
+            Vector wPts[4];
+            Bool hasPts = false;
+            if (retopo)
+            {
+                Int32 ptCount = retopo->GetPointCount();
+                const Vector* rPts = retopo->GetPointR();
+                Matrix rMg = retopo->GetMg();
+                hasPts = true;
+                for (Int32 k = 0; k < numPts; ++k)
+                {
+                    Int32 vi = m_hoverTweak.polyPts[k];
+                    if (vi < 0 || vi >= ptCount)
+                    {
+                        hasPts = false;
+                        break;
+                    }
+                    wPts[k] = rMg * rPts[vi];
+                }
+            }
+            if (!hasPts)
+            {
+                for (Int32 k = 0; k < 4; ++k)
+                    wPts[k] = m_hoverTweak.polyWorld[k];
+            }
+
             Vector polyColors[4] = { highlightColor, highlightColor, highlightColor, highlightColor };
             bd->SetTransparency(-140);
-            bd->DrawPolygon(m_hoverTweak.polyWorld, polyColors, m_hoverTweak.polyIsQuad);
+            bd->DrawPolygon(wPts, polyColors, m_hoverTweak.polyIsQuad);
             bd->DrawArrayEnd();
 
             bd->SetTransparency(0);
             bd->SetPen(highlightColor);
-            drawThickLine(m_hoverTweak.polyWorld[0], m_hoverTweak.polyWorld[1], hoverLineWidth);
-            drawThickLine(m_hoverTweak.polyWorld[1], m_hoverTweak.polyWorld[2], hoverLineWidth);
+            drawThickLine(wPts[0], wPts[1], hoverLineWidth);
+            drawThickLine(wPts[1], wPts[2], hoverLineWidth);
             if (m_hoverTweak.polyIsQuad)
             {
-                drawThickLine(m_hoverTweak.polyWorld[2], m_hoverTweak.polyWorld[3], hoverLineWidth);
-                drawThickLine(m_hoverTweak.polyWorld[3], m_hoverTweak.polyWorld[0], hoverLineWidth);
+                drawThickLine(wPts[2], wPts[3], hoverLineWidth);
+                drawThickLine(wPts[3], wPts[0], hoverLineWidth);
             }
             else
             {
-                drawThickLine(m_hoverTweak.polyWorld[2], m_hoverTweak.polyWorld[0], hoverLineWidth);
+                drawThickLine(wPts[2], wPts[0], hoverLineWidth);
             }
-            for (Int32 k = 0; k < (m_hoverTweak.polyIsQuad ? 4 : 3); ++k)
+            for (Int32 k = 0; k < numPts; ++k)
             {
-                drawPoint(m_hoverTweak.polyWorld[k], highlightColor, pointSize + 2.0);
+                drawPoint(wPts[k], highlightColor, pointSize + 2.0);
             }
         }
     }
