@@ -141,7 +141,7 @@ public:
     Bool DeletePolygon(PolygonObject* mesh, Int32 polyIndex);
 
     // Find nearest front-facing polygon under screen point, optionally checking target occlusion
-    Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr, Float* outAvgZ = nullptr);
+    Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr, Float* outAvgZ = nullptr, const SnapResult* precomputedTargetSnap = nullptr);
 
     // Find 4 surrounding vertices that can form a valid convex quad around (screenX, screenY)
     QuadPreview FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, const Vector& targetNormal, Float screenX, Float screenY);
@@ -164,8 +164,34 @@ public:
     // Relax vertices within brush radius in screen space (Laplacian smoothing constrained to target surface)
     Bool RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder = false, Bool lockInterior = false);
 
+    // Topological edge and neighbor cache
+    struct EdgeCacheEntry
+    {
+        Int32 u;
+        Int32 v;
+        Int32 count;
+    };
+
+    struct RetopoEdgeCache
+    {
+        maxon::BaseArray<EdgeCacheEntry>          edges;
+        maxon::BaseArray<maxon::BaseArray<Int32>> allNeighbors;
+        maxon::BaseArray<maxon::BaseArray<Int32>> boundaryNeighbors;
+        PolygonObject*                            mesh = nullptr;
+        Int32                                     ptCount = 0;
+        Int32                                     polyCount = 0;
+        Int32                                     dirty = -1;
+        Bool                                      valid = false;
+    };
+
+    void InvalidateEdgeCache() { m_edgeCache.valid = false; }
+    void EnsureEdgeCache(PolygonObject* retopo);
+
     // Commit changes and notify C4D
     void NotifyMeshUpdated(PolygonObject* mesh);
+
+private:
+    RetopoEdgeCache m_edgeCache;
 };
 
 } // namespace cinema

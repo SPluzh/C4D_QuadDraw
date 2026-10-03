@@ -4,6 +4,7 @@
 #include <utility>
 #include <cmath>
 #include <algorithm>
+#include <unordered_map>
 
 namespace cinema
 {
@@ -1183,7 +1184,7 @@ static Bool SegmentsIntersect2D(const Vector& a, const Vector& b, const Vector& 
     return abOpposite && cdOpposite;
 }
 
-Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh, SurfaceSnapper* snapper, Float* outAvgZ)
+Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh, SurfaceSnapper* snapper, Float* outAvgZ, const SnapResult* precomputedTargetSnap)
 {
     if (!bd || !mesh || mesh->GetPolygonCount() == 0)
         return NOTOK;
@@ -1199,7 +1200,12 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
 
     Float targetZAtCursor = 1e30;
     Bool hasTargetHit = false;
-    if (targetMesh && snapper && targetMesh->GetPolygonCount() > 0)
+    if (precomputedTargetSnap && precomputedTargetSnap->valid)
+    {
+        targetZAtCursor = bd->WS(precomputedTargetSnap->worldPos).z;
+        hasTargetHit = true;
+    }
+    else if (targetMesh && snapper && targetMesh->GetPolygonCount() > 0)
     {
         SnapResult tSnap = snapper->RaycastSurface(bd, targetMesh, screenX, screenY);
         if (tSnap.valid)
@@ -1225,18 +1231,43 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
         return u * a.z + v * b.z + w * c.z;
     };
 
+    Int32 ptCount = mesh->GetPointCount();
+    maxon::BaseArray<Vector> sPts;
+    sPts.Resize(ptCount) iferr_ignore("Resize sPts");
+    for (Int32 i = 0; i < ptCount; ++i)
+        sPts[i] = bd->WS(mg * pts[i]);
+
     for (Int32 i = 0; i < polyCount; ++i)
     {
         const CPolygon& p = polys[i];
-        Vector wa = mg * pts[p.a];
-        Vector wb = mg * pts[p.b];
-        Vector wc = mg * pts[p.c];
-
-        Vector sa = bd->WS(wa);
-        Vector sb = bd->WS(wb);
-        Vector sc = bd->WS(wc);
+        const Vector& sa = sPts[p.a];
+        const Vector& sb = sPts[p.b];
+        const Vector& sc = sPts[p.c];
 
         if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0)
+            continue;
+
+        Float pMinX = std::min(std::min(sa.x, sb.x), sc.x);
+        Float pMaxX = std::max(std::max(sa.x, sb.x), sc.x);
+        if (p.c != p.d)
+        {
+            const Vector& sd = sPts[p.d];
+            if (sd.z <= 0.0) continue;
+            pMinX = std::min(pMinX, sd.x);
+            pMaxX = std::max(pMaxX, sd.x);
+        }
+        if (screenX < pMinX || screenX > pMaxX)
+            continue;
+
+        Float pMinY = std::min(std::min(sa.y, sb.y), sc.y);
+        Float pMaxY = std::max(std::max(sa.y, sb.y), sc.y);
+        if (p.c != p.d)
+        {
+            const Vector& sd = sPts[p.d];
+            pMinY = std::min(pMinY, sd.y);
+            pMaxY = std::max(pMaxY, sd.y);
+        }
+        if (screenY < pMinY || screenY > pMaxY)
             continue;
 
         Float exactZ = 1e30;
@@ -1249,9 +1280,8 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
         }
         else if (p.c != p.d)
         {
-            Vector wd = mg * pts[p.d];
-            Vector sd = bd->WS(wd);
-            if (sd.z > 0.0 && PointInTriangle2D(pScreen, sa, sc, sd))
+            const Vector& sd = sPts[p.d];
+            if (PointInTriangle2D(pScreen, sa, sc, sd))
             {
                 hit = true;
                 exactZ = calcDepth2D(pScreen, sa, sc, sd);
@@ -1302,20 +1332,26 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
     };
 
     maxon::BaseArray<CandidatePt> candidates;
-    const Float maxSearchRadius = 350.0;
+    maxon::BaseArray<Vector> allScreenPts;
+    allScreenPts.Resize(ptCount) iferr_ignore("Resize allScreenPts");
+
+    const Float maxSearchRadius = 150.0;
     const Float maxRadiusSq = maxSearchRadius * maxSearchRadius;
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
         Vector wPos = mg * pts[i];
         Vector sPos = bd->WS(wPos);
+        allScreenPts[i] = sPos;
 
         if (sPos.z <= 0.0) continue;
 
         Float dx = sPos.x - screenX;
+        if (std::abs(dx) > maxSearchRadius) continue;
         Float dy = sPos.y - screenY;
-        Float distSq = dx * dx + dy * dy;
+        if (std::abs(dy) > maxSearchRadius) continue;
 
+        Float distSq = dx * dx + dy * dy;
         if (distSq <= maxRadiusSq)
         {
             CandidatePt cp;
@@ -1334,7 +1370,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
     });
 
     Int32 numCand = (Int32)candidates.GetCount();
-    if (numCand > 16) numCand = 16;
+    if (numCand > 8) numCand = 8; // 8 candidates = 70 combinations max
 
     Int32 polyCount = retopo->GetPolygonCount();
     const CPolygon* polys = retopo->GetPolygonR();
@@ -1417,18 +1453,17 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     const CandidatePt& c2 = candidates[i2];
                     const CandidatePt& c3 = candidates[i3];
 
-                    if (hasExistingPolygon4(c0.index, c1.index, c2.index, c3.index))
-                        continue;
+                    // FAST Bounding Box Check FIRST: cursor must be within the 4 points
+                    Float minX = std::min(std::min(c0.screenPos.x, c1.screenPos.x), std::min(c2.screenPos.x, c3.screenPos.x));
+                    Float maxX = std::max(std::max(c0.screenPos.x, c1.screenPos.x), std::max(c2.screenPos.x, c3.screenPos.x));
+                    if (screenX < minX || screenX > maxX) continue;
 
-                    if (sharesThreeOrMoreWithExisting(c0.index, c1.index, c2.index, c3.index))
-                        continue;
+                    Float minY = std::min(std::min(c0.screenPos.y, c1.screenPos.y), std::min(c2.screenPos.y, c3.screenPos.y));
+                    Float maxY = std::max(std::max(c0.screenPos.y, c1.screenPos.y), std::max(c2.screenPos.y, c3.screenPos.y));
+                    if (screenY < minY || screenY > maxY) continue;
 
                     CandidatePt quadPts[4] = { c0, c1, c2, c3 };
                     Vector centroid = (c0.screenPos + c1.screenPos + c2.screenPos + c3.screenPos) * 0.25;
-
-                    // Centroid must not be inside any existing polygon!
-                    if (FindPolygonUnderScreen(bd, retopo, centroid.x, centroid.y) != NOTOK)
-                        continue;
 
                     Float angles[4];
                     for (Int32 k = 0; k < 4; ++k)
@@ -1467,7 +1502,18 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     if (d0 < 0.0 || d1 < 0.0 || d2 < 0.0 || d3 < 0.0)
                         continue;
 
-                    // Ensure no other retopo vertex is inside this quad
+                    // CURSOR IS INSIDE! Now run deeper topological checks:
+                    if (hasExistingPolygon4(c0.index, c1.index, c2.index, c3.index))
+                        continue;
+
+                    if (sharesThreeOrMoreWithExisting(c0.index, c1.index, c2.index, c3.index))
+                        continue;
+
+                    // Centroid must not be inside any existing polygon!
+                    if (FindPolygonUnderScreen(bd, retopo, centroid.x, centroid.y) != NOTOK)
+                        continue;
+
+                    // Ensure no other retopo vertex is inside this quad (using precomputed allScreenPts!)
                     Bool hasOtherInside = false;
                     for (Int32 m = 0; m < ptCount; ++m)
                     {
@@ -1475,8 +1521,9 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                             m == quadPts[2].index || m == quadPts[3].index)
                             continue;
 
-                        Vector sPt = bd->WS(mg * pts[m]);
+                        const Vector& sPt = allScreenPts[m];
                         if (sPt.z <= 0.0) continue;
+                        if (sPt.x < minX || sPt.x > maxX || sPt.y < minY || sPt.y > maxY) continue;
 
                         Float t0 = cross2D(quadPts[0].screenPos, quadPts[1].screenPos, sPt) * sign;
                         Float t1 = cross2D(quadPts[1].screenPos, quadPts[2].screenPos, sPt) * sign;
@@ -1492,20 +1539,24 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     if (hasOtherInside)
                         continue;
 
-                    // Ensure no existing polygon centroid is inside this quad
+                    // Ensure no existing polygon centroid is inside this quad (using precomputed allScreenPts!)
                     Bool hasPolyCentroidInside = false;
                     for (Int32 p = 0; p < polyCount; ++p)
                     {
                         const CPolygon& poly = polys[p];
-                        Vector sa = bd->WS(mg * pts[poly.a]);
-                        Vector sb = bd->WS(mg * pts[poly.b]);
-                        Vector sc = bd->WS(mg * pts[poly.c]);
+                        const Vector& sa = allScreenPts[poly.a];
+                        const Vector& sb = allScreenPts[poly.b];
+                        const Vector& sc = allScreenPts[poly.c];
+                        if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0) continue;
                         Vector polyCenter = (sa + sb + sc) * (1.0 / 3.0);
                         if (poly.c != poly.d)
                         {
-                            Vector sd = bd->WS(mg * pts[poly.d]);
+                            const Vector& sd = allScreenPts[poly.d];
+                            if (sd.z <= 0.0) continue;
                             polyCenter = (sa + sb + sc + sd) * 0.25;
                         }
+                        if (polyCenter.x < minX || polyCenter.x > maxX || polyCenter.y < minY || polyCenter.y > maxY)
+                            continue;
 
                         Float t0 = cross2D(quadPts[0].screenPos, quadPts[1].screenPos, polyCenter) * sign;
                         Float t1 = cross2D(quadPts[1].screenPos, quadPts[2].screenPos, polyCenter) * sign;
@@ -1537,8 +1588,13 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     {
                         Int32 qA = quadPts[qe].index;
                         Int32 qB = quadPts[(qe + 1) % 4].index;
-                        Vector sA = quadPts[qe].screenPos;
-                        Vector sB = quadPts[(qe + 1) % 4].screenPos;
+                        const Vector& sA = quadPts[qe].screenPos;
+                        const Vector& sB = quadPts[(qe + 1) % 4].screenPos;
+
+                        Float eMinX = std::min(sA.x, sB.x);
+                        Float eMaxX = std::max(sA.x, sB.x);
+                        Float eMinY = std::min(sA.y, sB.y);
+                        Float eMaxY = std::max(sA.y, sB.y);
 
                         for (Int32 p = 0; p < polyCount; ++p)
                         {
@@ -1558,9 +1614,17 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                                 if (qA == pU || qA == pV || qB == pU || qB == pV)
                                     continue;
 
-                                Vector sU = bd->WS(mg * pts[pU]);
-                                Vector sV = bd->WS(mg * pts[pV]);
+                                const Vector& sU = allScreenPts[pU];
+                                const Vector& sV = allScreenPts[pV];
                                 if (sU.z <= 0.0 || sV.z <= 0.0) continue;
+
+                                Float uMinX = std::min(sU.x, sV.x);
+                                Float uMaxX = std::max(sU.x, sV.x);
+                                if (eMaxX < uMinX || eMinX > uMaxX) continue;
+
+                                Float uMinY = std::min(sU.y, sV.y);
+                                Float uMaxY = std::max(sU.y, sV.y);
+                                if (eMaxY < uMinY || eMinY > uMaxY) continue;
 
                                 if (SegmentsIntersect2D(sA, sB, sU, sV))
                                 {
@@ -2132,44 +2196,65 @@ static Float DistToSegment2D(Float px, Float py, Float ax, Float ay, Float bx, F
     return std::sqrt(dx * dx + dy * dy);
 }
 
-Bool MeshBuilder::IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius)
+void MeshBuilder::EnsureEdgeCache(PolygonObject* retopo)
 {
-    if (!retopo || !bd)
-        return false;
+    if (!retopo)
+    {
+        m_edgeCache.valid = false;
+        return;
+    }
 
     Int32 ptCount = retopo->GetPointCount();
     Int32 polyCount = retopo->GetPolygonCount();
-    if (ptCount < 3 || polyCount == 0)
-        return false;
+    Int32 dirty = retopo->GetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::MATRIX);
 
-    const Vector* pts = retopo->GetPointR();
-    const CPolygon* polys = retopo->GetPolygonR();
-    Matrix mg = retopo->GetMg();
-
-    struct EdgeEntry
+    if (m_edgeCache.valid &&
+        m_edgeCache.mesh == retopo &&
+        m_edgeCache.ptCount == ptCount &&
+        m_edgeCache.polyCount == polyCount &&
+        m_edgeCache.dirty == dirty)
     {
-        Int32 u;
-        Int32 v;
-        Int32 count;
-    };
-    maxon::BaseArray<EdgeEntry> edges;
+        return;
+    }
+
+    m_edgeCache.edges.Reset();
+    m_edgeCache.allNeighbors.Reset();
+    m_edgeCache.boundaryNeighbors.Reset();
+
+    if (ptCount < 3 || polyCount == 0)
+    {
+        m_edgeCache.valid = false;
+        return;
+    }
+
+    m_edgeCache.allNeighbors.Resize(ptCount) iferr_ignore("Resize allNeighbors");
+    m_edgeCache.boundaryNeighbors.Resize(ptCount) iferr_ignore("Resize boundaryNeighbors");
+
+    const CPolygon* polys = retopo->GetPolygonR();
+
+    std::unordered_map<UInt64, Int32> edgeMap;
+    edgeMap.reserve(polyCount * 3);
 
     auto addOrIncEdge = [&](Int32 a, Int32 b) {
+        if (a < 0 || b < 0 || a == b || a >= ptCount || b >= ptCount) return;
         Int32 u = std::min(a, b);
         Int32 v = std::max(a, b);
-        for (Int32 k = 0; k < (Int32)edges.GetCount(); ++k)
+        UInt64 key = ((UInt64)(UInt32)u << 32) | (UInt32)v;
+        auto it = edgeMap.find(key);
+        if (it == edgeMap.end())
         {
-            if (edges[k].u == u && edges[k].v == v)
-            {
-                edges[k].count++;
-                return;
-            }
+            Int32 idx = (Int32)m_edgeCache.edges.GetCount();
+            edgeMap[key] = idx;
+            EdgeCacheEntry ee;
+            ee.u = u;
+            ee.v = v;
+            ee.count = 1;
+            m_edgeCache.edges.Append(ee) iferr_ignore("Append edge");
         }
-        EdgeEntry ee;
-        ee.u = u;
-        ee.v = v;
-        ee.count = 1;
-        edges.Append(ee) iferr_ignore("Append edge");
+        else
+        {
+            m_edgeCache.edges[it->second].count++;
+        }
     };
 
     for (Int32 p = 0; p < polyCount; ++p)
@@ -2188,17 +2273,58 @@ Bool MeshBuilder::IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float 
         }
     }
 
+    Int32 edgeCount = (Int32)m_edgeCache.edges.GetCount();
+    for (Int32 k = 0; k < edgeCount; ++k)
+    {
+        const EdgeCacheEntry& ee = m_edgeCache.edges[k];
+        m_edgeCache.allNeighbors[ee.u].Append(ee.v) iferr_ignore("Append");
+        m_edgeCache.allNeighbors[ee.v].Append(ee.u) iferr_ignore("Append");
+        if (ee.count == 1)
+        {
+            m_edgeCache.boundaryNeighbors[ee.u].Append(ee.v) iferr_ignore("Append");
+            m_edgeCache.boundaryNeighbors[ee.v].Append(ee.u) iferr_ignore("Append");
+        }
+    }
+
+    m_edgeCache.mesh = retopo;
+    m_edgeCache.ptCount = ptCount;
+    m_edgeCache.polyCount = polyCount;
+    m_edgeCache.dirty = dirty;
+    m_edgeCache.valid = true;
+}
+
+Bool MeshBuilder::IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius)
+{
+    if (!retopo || !bd)
+        return false;
+
+    EnsureEdgeCache(retopo);
+    if (!m_edgeCache.valid)
+        return false;
+
+    Int32 ptCount = retopo->GetPointCount();
+    const Vector* pts = retopo->GetPointR();
+    Matrix mg = retopo->GetMg();
+
     Float minBorderDist = 1e30;
     Float minInteriorDist = 1e30;
 
-    for (Int32 k = 0; k < (Int32)edges.GetCount(); ++k)
+    Int32 edgeCount = (Int32)m_edgeCache.edges.GetCount();
+    for (Int32 k = 0; k < edgeCount; ++k)
     {
-        const EdgeEntry& ee = edges[k];
+        const EdgeCacheEntry& ee = m_edgeCache.edges[k];
         if (ee.u < 0 || ee.u >= ptCount || ee.v < 0 || ee.v >= ptCount) continue;
 
         Vector sA = bd->WS(mg * pts[ee.u]);
         Vector sB = bd->WS(mg * pts[ee.v]);
         if (sA.z <= 0.0 || sB.z <= 0.0) continue;
+
+        Float minX = std::min(sA.x, sB.x) - brushRadius;
+        Float maxX = std::max(sA.x, sB.x) + brushRadius;
+        Float minY = std::min(sA.y, sB.y) - brushRadius;
+        Float maxY = std::max(sA.y, sB.y) + brushRadius;
+        if (screenX < minX || screenX > maxX || screenY < minY || screenY > maxY)
+            continue;
 
         Float d = DistToSegment2D(screenX, screenY, sA.x, sA.y, sB.x, sB.y);
         if (ee.count == 1)
@@ -2263,69 +2389,10 @@ Bool MeshBuilder::RelaxVertices(PolygonObject* retopo, PolygonObject* target, Su
     if (affectedVertices.GetCount() == 0)
         return false;
 
-    // 2. Build vertex adjacency (neighbors) and boundary neighbors
-    struct EdgeEntry
-    {
-        Int32 u;
-        Int32 v;
-        Int32 count;
-    };
-    maxon::BaseArray<EdgeEntry> edges;
-
-    auto addOrIncEdge = [&](Int32 a, Int32 b) {
-        Int32 u = std::min(a, b);
-        Int32 v = std::max(a, b);
-        for (Int32 k = 0; k < (Int32)edges.GetCount(); ++k)
-        {
-            if (edges[k].u == u && edges[k].v == v)
-            {
-                edges[k].count++;
-                return;
-            }
-        }
-        EdgeEntry ee;
-        ee.u = u;
-        ee.v = v;
-        ee.count = 1;
-        edges.Append(ee) iferr_ignore("Append edge");
-    };
-
-    for (Int32 p = 0; p < polyCount; ++p)
-    {
-        const CPolygon& poly = polys[p];
-        addOrIncEdge(poly.a, poly.b);
-        addOrIncEdge(poly.b, poly.c);
-        if (poly.c != poly.d)
-        {
-            addOrIncEdge(poly.c, poly.d);
-            addOrIncEdge(poly.d, poly.a);
-        }
-        else
-        {
-            addOrIncEdge(poly.c, poly.a);
-        }
-    }
-
-    maxon::BaseArray<maxon::BaseArray<Int32>> allNeighbors;
-    maxon::BaseArray<maxon::BaseArray<Int32>> boundaryNeighbors;
-    allNeighbors.Resize(ptCount) iferr_ignore("Resize");
-    boundaryNeighbors.Resize(ptCount) iferr_ignore("Resize");
-
-    for (Int32 k = 0; k < (Int32)edges.GetCount(); ++k)
-    {
-        const EdgeEntry& ee = edges[k];
-        if (ee.u >= 0 && ee.u < ptCount && ee.v >= 0 && ee.v < ptCount)
-        {
-            allNeighbors[ee.u].Append(ee.v) iferr_ignore("Append");
-            allNeighbors[ee.v].Append(ee.u) iferr_ignore("Append");
-
-            if (ee.count == 1) // Boundary edge
-            {
-                boundaryNeighbors[ee.u].Append(ee.v) iferr_ignore("Append");
-                boundaryNeighbors[ee.v].Append(ee.u) iferr_ignore("Append");
-            }
-        }
-    }
+    // 2. Ensure topological neighbors and boundary neighbors from cache
+    EnsureEdgeCache(retopo);
+    if (!m_edgeCache.valid)
+        return false;
 
     // 3. Compute vertex normals for projection onto target
     maxon::BaseArray<Vector> pointNormals;
@@ -2362,8 +2429,8 @@ Bool MeshBuilder::RelaxVertices(PolygonObject* retopo, PolygonObject* target, Su
         Float w = vertexWeights[ai];
         if (w <= 0.001) continue;
 
-        const maxon::BaseArray<Int32>& bNeighbors = boundaryNeighbors[idx];
-        const maxon::BaseArray<Int32>& nNeighbors = allNeighbors[idx];
+        const maxon::BaseArray<Int32>& bNeighbors = m_edgeCache.boundaryNeighbors[idx];
+        const maxon::BaseArray<Int32>& nNeighbors = m_edgeCache.allNeighbors[idx];
 
         Bool isBoundary = (bNeighbors.GetCount() > 0);
 

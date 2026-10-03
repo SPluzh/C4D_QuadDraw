@@ -25,6 +25,16 @@ SnapResult SurfaceSnapper::RaycastSurface(BaseDraw* bd, PolygonObject* targetMes
     if (!bd || !targetMesh || targetMesh->GetPolygonCount() == 0)
         return result;
 
+    Int32 dirty = targetMesh->GetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::MATRIX);
+    if (m_cachedRaycast.bd == bd &&
+        m_cachedRaycast.target == targetMesh &&
+        m_cachedRaycast.dirty == dirty &&
+        std::abs(m_cachedRaycast.screenX - screenX) < 0.001 &&
+        std::abs(m_cachedRaycast.screenY - screenY) < 0.001)
+    {
+        return m_cachedRaycast.result;
+    }
+
     // Convert screen coordinates to world ray
     Vector pNear = bd->SW(Vector(screenX, screenY, 0.0));
     Vector pFar  = bd->SW(Vector(screenX, screenY, 1000000.0));
@@ -52,7 +62,6 @@ SnapResult SurfaceSnapper::RaycastSurface(BaseDraw* bd, PolygonObject* targetMes
         if (!m_collider) return result;
     }
 
-    Int32 dirty = targetMesh->GetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::MATRIX);
     if (m_cachedTarget != targetMesh || m_cachedDirty != dirty)
     {
         if (!m_collider->Init(targetMesh, false))
@@ -77,9 +86,15 @@ SnapResult SurfaceSnapper::RaycastSurface(BaseDraw* bd, PolygonObject* targetMes
             result.worldPos = worldHit;
             result.normal = worldNorm;
             result.elementIndex = col.face_id;
-            return result;
         }
     }
+
+    m_cachedRaycast.bd = bd;
+    m_cachedRaycast.target = targetMesh;
+    m_cachedRaycast.dirty = dirty;
+    m_cachedRaycast.screenX = screenX;
+    m_cachedRaycast.screenY = screenY;
+    m_cachedRaycast.result = result;
 
     return result;
 }
@@ -198,7 +213,7 @@ SnapResult SurfaceSnapper::ProjectPointAlongNormal(PolygonObject* targetMesh, co
     return result;
 }
 
-Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, Int32 excludeIndex, PolygonObject* targetMesh)
+Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, Int32 excludeIndex, PolygonObject* targetMesh, const SnapResult* precomputedTargetSnap)
 {
     if (!bd || !retopoMesh || retopoMesh->GetPointCount() == 0)
         return NOTOK;
@@ -209,10 +224,15 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
 
     Vector pScreen(screenX, screenY, 0.0);
 
-    // 1. Check depth against Target Mesh surface under cursor (if targetMesh is provided)
+    // 1. Check depth against Target Mesh surface under cursor (if targetMesh or precomputedTargetSnap is provided)
     Float targetDepthAtCursor = 1e30;
     Bool hasTargetHit = false;
-    if (targetMesh && targetMesh->GetPolygonCount() > 0)
+    if (precomputedTargetSnap && precomputedTargetSnap->valid)
+    {
+        targetDepthAtCursor = bd->WS(precomputedTargetSnap->worldPos).z;
+        hasTargetHit = true;
+    }
+    else if (targetMesh && targetMesh->GetPolygonCount() > 0)
     {
         SnapResult tSnap = RaycastSurface(bd, targetMesh, screenX, screenY);
         if (tSnap.valid)
@@ -355,7 +375,7 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
     return bestIdx;
 }
 
-EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, PolygonObject* targetMesh)
+EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels, PolygonObject* targetMesh, const SnapResult* precomputedTargetSnap)
 {
     EdgeHit hit;
     if (!bd || !retopoMesh || retopoMesh->GetPolygonCount() == 0)
@@ -368,10 +388,15 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
 
     Vector cursor(screenX, screenY, 0.0);
 
-    // 1. Check depth against Target Mesh surface under cursor (if targetMesh is provided)
+    // 1. Check depth against Target Mesh surface under cursor (if targetMesh or precomputedTargetSnap is provided)
     Float targetDepthAtCursor = 1e30;
     Bool hasTargetHit = false;
-    if (targetMesh && targetMesh->GetPolygonCount() > 0)
+    if (precomputedTargetSnap && precomputedTargetSnap->valid)
+    {
+        targetDepthAtCursor = bd->WS(precomputedTargetSnap->worldPos).z;
+        hasTargetHit = true;
+    }
+    else if (targetMesh && targetMesh->GetPolygonCount() > 0)
     {
         SnapResult tSnap = RaycastSurface(bd, targetMesh, screenX, screenY);
         if (tSnap.valid)
@@ -409,39 +434,63 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
         return u * a.z + v * b.z + w * c.z;
     };
 
+    Int32 ptCount = retopoMesh->GetPointCount();
+    maxon::BaseArray<Vector> sPts;
+    sPts.Resize(ptCount) iferr_ignore("Resize sPts");
+    for (Int32 i = 0; i < ptCount; ++i)
+        sPts[i] = bd->WS(mg * pts[i]);
+
     for (Int32 pi = 0; pi < polyCount; ++pi)
     {
         const CPolygon& p = polys[pi];
-        Vector wa = mg * pts[p.a];
-        Vector wb = mg * pts[p.b];
-        Vector wc = mg * pts[p.c];
+        const Vector& sa = sPts[p.a];
+        const Vector& sb = sPts[p.b];
+        const Vector& sc = sPts[p.c];
+        if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0)
+            continue;
 
-        Vector sa = bd->WS(wa);
-        Vector sb = bd->WS(wb);
-        Vector sc = bd->WS(wc);
-        if (sa.z > 0.0 && sb.z > 0.0 && sc.z > 0.0)
+        Float pMinX = std::min(std::min(sa.x, sb.x), sc.x);
+        Float pMaxX = std::max(std::max(sa.x, sb.x), sc.x);
+        if (p.c != p.d)
         {
-            if (pointInTri2D(cursor, sa, sb, sc))
+            const Vector& sd = sPts[p.d];
+            if (sd.z <= 0.0) continue;
+            pMinX = std::min(pMinX, sd.x);
+            pMaxX = std::max(pMaxX, sd.x);
+        }
+        if (cursor.x < pMinX || cursor.x > pMaxX)
+            continue;
+
+        Float pMinY = std::min(std::min(sa.y, sb.y), sc.y);
+        Float pMaxY = std::max(std::max(sa.y, sb.y), sc.y);
+        if (p.c != p.d)
+        {
+            const Vector& sd = sPts[p.d];
+            pMinY = std::min(pMinY, sd.y);
+            pMaxY = std::max(pMaxY, sd.y);
+        }
+        if (cursor.y < pMinY || cursor.y > pMaxY)
+            continue;
+
+        if (pointInTri2D(cursor, sa, sb, sc))
+        {
+            Float z = calcDepth2D(cursor, sa, sb, sc);
+            if (z < retopoDepthUnderCursor)
             {
-                Float z = calcDepth2D(cursor, sa, sb, sc);
+                retopoDepthUnderCursor = z;
+                hasRetopoHit = true;
+            }
+        }
+        else if (p.c != p.d)
+        {
+            const Vector& sd = sPts[p.d];
+            if (pointInTri2D(cursor, sa, sc, sd))
+            {
+                Float z = calcDepth2D(cursor, sa, sc, sd);
                 if (z < retopoDepthUnderCursor)
                 {
                     retopoDepthUnderCursor = z;
                     hasRetopoHit = true;
-                }
-            }
-            else if (p.c != p.d)
-            {
-                Vector wd = mg * pts[p.d];
-                Vector sd = bd->WS(wd);
-                if (sd.z > 0.0 && pointInTri2D(cursor, sa, sc, sd))
-                {
-                    Float z = calcDepth2D(cursor, sa, sc, sd);
-                    if (z < retopoDepthUnderCursor)
-                    {
-                        retopoDepthUnderCursor = z;
-                        hasRetopoHit = true;
-                    }
                 }
             }
         }
@@ -458,13 +507,19 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
     Float minZ = 1e30;
 
     auto checkEdge = [&](Int32 u, Int32 v, Int32 polyIdx) {
-        if (u < 0 || v < 0 || u == v) return;
+        if (u < 0 || v < 0 || u == v || u >= ptCount || v >= ptCount) return;
 
-        Vector wA = mg * pts[u];
-        Vector wB = mg * pts[v];
-        Vector sA = bd->WS(wA);
-        Vector sB = bd->WS(wB);
+        const Vector& sA = sPts[u];
+        const Vector& sB = sPts[v];
         if (sA.z <= 0.0 || sB.z <= 0.0) return;
+
+        Float minX = std::min(sA.x, sB.x) - maxRadiusPixels;
+        Float maxX = std::max(sA.x, sB.x) + maxRadiusPixels;
+        if (cursor.x < minX || cursor.x > maxX) return;
+
+        Float minY = std::min(sA.y, sB.y) - maxRadiusPixels;
+        Float maxY = std::max(sA.y, sB.y) + maxRadiusPixels;
+        if (cursor.y < minY || cursor.y > maxY) return;
 
         Vector ab = sB - sA;
         Float lenSq = ab.x * ab.x + ab.y * ab.y;
@@ -496,8 +551,8 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
             ec.hit.valid = true;
             ec.hit.v0 = u;
             ec.hit.v1 = v;
-            ec.hit.worldPos0 = wA;
-            ec.hit.worldPos1 = wB;
+            ec.hit.worldPos0 = mg * pts[u];
+            ec.hit.worldPos1 = mg * pts[v];
             ec.hit.t = t;
             ec.hit.dist = d;
             ec.hit.polyIndex = polyIdx;
@@ -565,6 +620,11 @@ SnapResult SurfaceSnapper::Snap(BaseDocument* doc, BaseDraw* bd, PolygonObject* 
 
     // 2. Smooth continuous surface raycast on target mesh
     return RaycastSurface(bd, targetMesh, screenX, screenY);
+}
+
+void SurfaceSnapper::ClearRaycastCache()
+{
+    m_cachedRaycast = CachedRaycast();
 }
 
 } // namespace cinema

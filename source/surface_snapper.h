@@ -50,18 +50,32 @@ public:
     SnapResult ProjectPointAlongNormal(PolygonObject* targetMesh, const Vector& worldPoint, const Vector& worldNormal, Float maxDist = 500.0);
 
     // Find nearest retopo vertex in screen space (with target occlusion and depth sorting)
-    Int32 FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels = 10.0, Int32 excludeIndex = NOTOK, PolygonObject* targetMesh = nullptr);
+    Int32 FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels = 10.0, Int32 excludeIndex = NOTOK, PolygonObject* targetMesh = nullptr, const SnapResult* precomputedTargetSnap = nullptr);
 
     // Find nearest retopo edge in screen space within pixel distance (with target occlusion and depth sorting)
-    EdgeHit FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels = 8.0, PolygonObject* targetMesh = nullptr);
+    EdgeHit FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retopoMesh, Float screenX, Float screenY, Float maxRadiusPixels = 8.0, PolygonObject* targetMesh = nullptr, const SnapResult* precomputedTargetSnap = nullptr);
 
     // Combined snap: checks retopo vertex first (for dragging/welding), then raycasts to target surface
     SnapResult Snap(BaseDocument* doc, BaseDraw* bd, PolygonObject* targetMesh, PolygonObject* retopoMesh, Float screenX, Float screenY, Float snapRadiusPixels = 10.0);
 
+    // Invalidate cached raycast result
+    void ClearRaycastCache();
+
 private:
+    struct CachedRaycast
+    {
+        BaseDraw*      bd = nullptr;
+        PolygonObject* target = nullptr;
+        Float          screenX = -1e30;
+        Float          screenY = -1e30;
+        Int32          dirty = -1;
+        SnapResult     result;
+    };
+
     GeRayCollider* m_collider = nullptr;
     PolygonObject* m_cachedTarget = nullptr;
     Int32          m_cachedDirty = -1;
+    CachedRaycast  m_cachedRaycast;
 };
 
 } // namespace cinema

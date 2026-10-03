@@ -55,6 +55,14 @@ private:
     Float          m_brushResizeCenterX = 0.0;
     Float          m_brushResizeCenterY = 0.0;
 
+    // Shift hover throttling and border check caching
+    Float          m_lastShiftHoverX = -1e30;
+    Float          m_lastShiftHoverY = -1e30;
+    Float          m_lastBorderCheckX = -1e30;
+    Float          m_lastBorderCheckY = -1e30;
+    Float          m_lastBorderCheckRadius = -1.0;
+    Bool           m_lastBorderResult = false;
+
     // Ctrl Cut / Insert Edge Loop Preview (Maya style)
     EdgeCutResult  m_edgeCutPreview;
     Int32          m_cachedCutV0 = NOTOK;

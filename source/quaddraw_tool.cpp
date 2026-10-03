@@ -577,34 +577,18 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     m_cachedCutPoly = NOTOK;
 
     // =========================================================================
+    // =========================================================================
     // MODE 3: SHIFT HELD (QUAD CREATION PREVIEW OR MAYA RELAX BRUSH)
     // =========================================================================
     if (m_shiftHeld)
     {
-        // Continuous raycast on surface if target exists, else use view normal
-        if (target)
-        {
-            m_hoverSnap = m_snapper.RaycastSurface(bd, target, x, y);
-        }
-        else if (bd && retopo)
-        {
-            Vector refPt = retopo->GetMg().off;
-            if (retopo->GetPointCount() > 0)
-                refPt = retopo->GetMg() * retopo->GetPointR()[0];
-            m_hoverSnap.worldPos = bd->SW_Reference(x, y, refPt);
-            m_hoverSnap.normal = -bd->GetMg().sqmat.v3;
-            m_hoverSnap.valid = true;
-            m_hoverSnap.mode = SnapMode::None;
-        }
-        else
-        {
-            m_hoverSnap.valid = false;
-        }
+        Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
 
+        // Check quad creation preview only if retopo has at least 4 vertices
         if (retopo && retopo->GetPointCount() >= 4)
         {
-            Vector norm = m_hoverSnap.valid ? m_hoverSnap.normal : (bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0));
-            m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, norm, x, y);
+            Vector viewNormal = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
+            m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y);
         }
         else
         {
@@ -614,46 +598,15 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         if (m_shiftQuadPreview.valid)
         {
             bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
-            StatusSetText(FormatString("QuadDraw | Shift+LMB: Create Quad! (Vertices: @, @, @, @) | Shift+MMB Drag: Resize Brush | Target: @"_s,
-                m_shiftQuadPreview.v[0], m_shiftQuadPreview.v[1], m_shiftQuadPreview.v[2], m_shiftQuadPreview.v[3], targetName));
+            StatusSetText(FormatString("QuadDraw | Shift+LMB: Create Quad! (Vertices: @, @, @, @) | Shift+MMB Drag: Resize Brush (@ px) | Target: @"_s,
+                m_shiftQuadPreview.v[0], m_shiftQuadPreview.v[1], m_shiftQuadPreview.v[2], m_shiftQuadPreview.v[3], (Int32)(brushRadius + 0.5), targetName));
         }
         else
         {
-            Int32 nearPoly = retopo ? m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper) : NOTOK;
-            EdgeHit nearEdge = retopo ? m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 12.0, target) : EdgeHit();
-            Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
-
-            if (nearPoly != NOTOK || nearEdge.valid)
-            {
-                bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-                Int32 relaxMode = data.GetInt32(QUADDRAW_RELAX_MODE, QUADDRAW_RELAX_MODE_AUTOLOCK);
-
-                if (relaxMode == QUADDRAW_RELAX_MODE_AUTOLOCK)
-                {
-                    Bool nearBorder = m_builder.IsCursorNearBorder(retopo, bd, x, y, brushRadius);
-                    if (nearBorder)
-                        StatusSetText(FormatString("QuadDraw [RELAX: Auto-lock -> Border] | Shift+LMB Drag: Relax Border | Shift+MMB Drag: Resize Brush (@ px)"_s, (Int32)(brushRadius + 0.5)));
-                    else
-                        StatusSetText(FormatString("QuadDraw [RELAX: Auto-lock -> Interior] | Shift+LMB Drag: Relax Interior | Shift+MMB Drag: Resize Brush (@ px)"_s, (Int32)(brushRadius + 0.5)));
-                }
-                else if (relaxMode == QUADDRAW_RELAX_MODE_INTERIOR)
-                {
-                    StatusSetText(FormatString("QuadDraw [RELAX: Interior] | Shift+LMB Drag: Relax Interior | Shift+MMB Drag: Resize Brush (@ px)"_s, (Int32)(brushRadius + 0.5)));
-                }
-                else if (relaxMode == QUADDRAW_RELAX_MODE_BORDER)
-                {
-                    StatusSetText(FormatString("QuadDraw [RELAX: Border] | Shift+LMB Drag: Relax Border | Shift+MMB Drag: Resize Brush (@ px)"_s, (Int32)(brushRadius + 0.5)));
-                }
-                else // QUADDRAW_RELAX_MODE_ALL
-                {
-                    StatusSetText(FormatString("QuadDraw [RELAX: All] | Shift+LMB Drag: Relax All | Shift+MMB Drag: Resize Brush (@ px)"_s, (Int32)(brushRadius + 0.5)));
-                }
-            }
-            else
-            {
-                bc.SetInt32(RESULT_CURSOR, MOUSE_NORMAL);
-                StatusSetText(FormatString("QuadDraw | Shift+LMB: Quad/Relax | Shift+MMB Drag: Resize Brush (@ px) | Target: @"_s, (Int32)(brushRadius + 0.5), targetName));
-            }
+            // Maya-style Relax brush (fast, responsive hover exactly like C4D_RelaxTool)
+            bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+            StatusSetText(FormatString("QuadDraw [RELAX] | Shift+LMB Drag: Relax Brush (@ px) | Shift+MMB Drag: Resize Brush | Target: @"_s,
+                (Int32)(brushRadius + 0.5), targetName));
         }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
