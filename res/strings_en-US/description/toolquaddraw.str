@@ -1,0 +1,26 @@
+STRINGTABLE toolquaddraw
+{
+    toolquaddraw                    "QuadDraw Retopo Tool";
+
+    QUADDRAW_GROUP_DISPLAY          "Display Settings";
+    QUADDRAW_MESH_COLOR             "Face Color";
+    QUADDRAW_FACE_OPACITY           "Face Opacity";
+    QUADDRAW_WIRE_COLOR             "Wire Color";
+    QUADDRAW_LINE_WIDTH             "Line Width";
+    QUADDRAW_POINT_SIZE             "Point Size";
+
+    QUADDRAW_GROUP_INTERACTIVE      "Interactive Settings";
+    QUADDRAW_PREVIEW_COLOR          "Quad Preview Color (Shift)";
+    QUADDRAW_CUT_COLOR              "Cut Loop Color (Ctrl)";
+    QUADDRAW_HIGHLIGHT_COLOR        "Hover Highlight Color";
+    QUADDRAW_HOVER_LINE_WIDTH       "Hover Line Width";
+
+    QUADDRAW_GROUP_RELAX            "Relax Brush (Shift+LMB Drag)";
+    QUADDRAW_RELAX_MODE             "Relax Mode";
+    QUADDRAW_RELAX_MODE_AUTOLOCK    "Auto-lock";
+    QUADDRAW_RELAX_MODE_INTERIOR    "Interior Vertices";
+    QUADDRAW_RELAX_MODE_BORDER      "Border Vertices";
+    QUADDRAW_RELAX_MODE_ALL         "All Vertices";
+    QUADDRAW_RELAX_RADIUS           "Relax Radius (px)";
+    QUADDRAW_RELAX_STRENGTH         "Relax Strength";
+}

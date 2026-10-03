@@ -1,0 +1,5 @@
+STRINGTABLE Tquaddraw
+{
+	Tquaddraw "QuadDraw";
+	QUADDRAW_TAG_TARGET "Целевой меш";
+}

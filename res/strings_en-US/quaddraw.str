@@ -1,0 +1,11 @@
+STRINGTABLE {
+  LANGID=1033 // English
+  {
+    MENU {
+      QUADDRAW "QuadDraw Retopo Tool";
+    }
+    TOOLTIPS {
+      QUADDRAW "QuadDraw Retopo Tool\nClick on surface to create quads / strips\nSnaps to target mesh";
+    }
+  }
+}
