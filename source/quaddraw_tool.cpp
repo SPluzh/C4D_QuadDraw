@@ -183,7 +183,8 @@ Bool QuadDrawToolData::GetDDescription(const BaseDocument* doc, const BaseContai
 Bool QuadDrawToolData::GetDEnabling(const BaseDocument* doc, const BaseContainer& data, const DescID& id, const GeData& t_data, DESCFLAGS_ENABLE flags, const BaseContainer* itemdesc) const
 {
     Int32 paramId = (Int32)id[0].id;
-    if (paramId == QUADDRAW_MESH_COLOR || paramId == QUADDRAW_FACE_OPACITY)
+    if (paramId == QUADDRAW_MESH_COLOR || paramId == QUADDRAW_FACE_OPACITY ||
+        paramId == QUADDRAW_WIRE_COLOR || paramId == QUADDRAW_LINE_WIDTH)
     {
         Bool disabled = data.GetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
         return !disabled;
@@ -2123,8 +2124,8 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
     PolygonObject* retopo = GetEditableMesh(doc, false);
 
-    // 1. Draw existing retopo polygons in user face color with transparency and wireframe lines
-    if (retopo && retopo->GetPolygonCount() > 0)
+    // 1. Draw existing retopo polygons in user face color with transparency and wireframe lines (if custom mesh shading is enabled)
+    if (!disableCustomShading && retopo && retopo->GetPolygonCount() > 0)
     {
         Int32 polyCount = retopo->GetPolygonCount();
         const CPolygon* polys = retopo->GetPolygonR();
@@ -2133,26 +2134,23 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
         Vector faceColors[4] = { faceColor, faceColor, faceColor, faceColor };
 
-        // Draw translucent faces so underlying target mesh remains visible (if custom mesh shading is not disabled)
-        if (!disableCustomShading)
+        // Draw translucent faces so underlying target mesh remains visible
+        bd->SetTransparency(transVal);
+        for (Int32 i = 0; i < polyCount; ++i)
         {
-            bd->SetTransparency(transVal);
-            for (Int32 i = 0; i < polyCount; ++i)
-            {
-                const CPolygon& p = polys[i];
-                Bool isQuad = (p.c != p.d);
+            const CPolygon& p = polys[i];
+            Bool isQuad = (p.c != p.d);
 
-                Vector qPts[4] = {
-                    rMg * pts[p.a],
-                    rMg * pts[p.b],
-                    rMg * pts[p.c],
-                    rMg * pts[p.d]
-                };
+            Vector qPts[4] = {
+                rMg * pts[p.a],
+                rMg * pts[p.b],
+                rMg * pts[p.c],
+                rMg * pts[p.d]
+            };
 
-                bd->DrawPolygon(qPts, faceColors, isQuad);
-            }
-            bd->DrawArrayEnd();
+            bd->DrawPolygon(qPts, faceColors, isQuad);
         }
+        bd->DrawArrayEnd();
 
         // Draw wireframe lines in user-configured wire color and thickness
         bd->SetTransparency(0);
