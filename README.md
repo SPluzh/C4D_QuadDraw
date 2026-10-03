@@ -42,6 +42,7 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 
 8. **Display Settings**:
    - **Disable Custom Mesh Shading** (`QUADDRAW_DISABLE_CUSTOM_SHADING`): checked by default to keep clean native Cinema 4D viewport shading on the editable mesh upon tool activation. Uncheck to display translucent retopo polygon face overlays (`Face Color` & `Face Opacity`).
+   - **Disable Point X-Ray** (`QUADDRAW_DISABLE_POINT_XRAY`): checked by default to prevent vertices from being drawn through the mesh (depth testing and backface culling). Uncheck to see all vertices through geometry (X-Ray mode).
    - Configurable wireframe color, line width, vertex point size, and interactive hover colors.
 
 ---
