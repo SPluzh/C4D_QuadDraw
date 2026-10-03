@@ -60,8 +60,8 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
         // Ensure all settings (including newly added ones) are initialized
         if (data.FindIndex(QUADDRAW_DISABLE_CUSTOM_SHADING) == NOTOK)
             data.SetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
-        if (data.FindIndex(QUADDRAW_DISABLE_POINT_XRAY) == NOTOK)
-            data.SetBool(QUADDRAW_DISABLE_POINT_XRAY, true);
+        if (data.FindIndex(QUADDRAW_DISABLE_XRAY) == NOTOK)
+            data.SetBool(QUADDRAW_DISABLE_XRAY, true);
         if (data.FindIndex(QUADDRAW_FACE_OPACITY) == NOTOK)
             data.SetFloat(QUADDRAW_FACE_OPACITY, 0.35);
         if (data.FindIndex(QUADDRAW_WIRE_COLOR) == NOTOK)
@@ -115,7 +115,7 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     const Vector defaultHighlightColor(1.0, 1.0, 1.0);      // White
 
     data.SetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
-    data.SetBool(QUADDRAW_DISABLE_POINT_XRAY, true);
+    data.SetBool(QUADDRAW_DISABLE_XRAY, true);
     data.SetVector(QUADDRAW_MESH_COLOR, defaultFaceColor);
     data.SetFloat(QUADDRAW_FACE_OPACITY, 0.35); // 35% opacity
     data.SetVector(QUADDRAW_WIRE_COLOR, defaultWireColor);
@@ -2038,7 +2038,12 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     const Vector defaultHighlightColor(1.0, 1.0, 1.0);      // White
 
     Bool disableCustomShading = data.GetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
-    Bool disablePointXRay     = data.GetBool(QUADDRAW_DISABLE_POINT_XRAY, true);
+    Bool disableXRay          = data.GetBool(QUADDRAW_DISABLE_XRAY, true);
+
+    // If X-Ray is disabled, completely reject Cinema 4D's occluded / Inverse-Z draw pass!
+    if (disableXRay && (flags & TOOLDRAWFLAGS::INVERSE_Z))
+        return TOOLDRAW::NONE;
+
     Vector faceColor = data.GetVector(QUADDRAW_MESH_COLOR, defaultFaceColor);
     Float faceOpacity = data.GetFloat(QUADDRAW_FACE_OPACITY, 0.35);
     if (faceOpacity > 1.0) faceOpacity /= 100.0;
@@ -2068,8 +2073,19 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     GeData oldSetZ = bd->GetDrawParam(DRAW_PARAMETER_SETZ);
     bd->SetDrawParam(DRAW_PARAMETER_LINEWIDTH, GeData(lineWidth));
 
-    auto drawThickLine = [&](const Vector& p1, const Vector& p2, Float width)
+    auto drawThickLine = [&](const Vector& p1, const Vector& p2, Float width, Bool depthTest = false, Int32 zOffset = 2)
     {
+        if (depthTest)
+        {
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+            bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+            bd->LineZOffset(zOffset);
+        }
+        else
+        {
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+        }
+
         bd->DrawLine(p1, p2, 0);
         if (width >= 1.35)
         {
@@ -2096,6 +2112,9 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 }
             }
         }
+
+        if (depthTest)
+            bd->LineZOffset(0);
     };
 
     auto drawPoint = [&](const Vector& p, const Vector& col, Float size, Bool depthTest = false, const Vector& toCam = Vector(0.0))
@@ -2111,9 +2130,11 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         {
             bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
             bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+            bd->LineZOffset(3);
             bd->SetPen(col);
-            Vector drawP = (toCam.GetSquaredLength() > 0.5) ? (p + toCam * 0.08) : p;
+            Vector drawP = (toCam.GetSquaredLength() > 0.5) ? (p + toCam * 0.05) : p;
             bd->DrawHandle(drawP, hType, 0);
+            bd->LineZOffset(0);
         }
         else
         {
@@ -2132,10 +2153,22 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 Vector pC = bd->SW(Vector(s.x + r, s.y + r, s.z));
                 Vector pD = bd->SW(Vector(s.x - r, s.y + r, s.z));
                 bd->SetPen(col);
+                if (depthTest)
+                {
+                    bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+                    bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+                    bd->LineZOffset(3);
+                }
+                else
+                {
+                    bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+                }
                 bd->DrawLine(pA, pB, 0);
                 bd->DrawLine(pB, pC, 0);
                 bd->DrawLine(pC, pD, 0);
                 bd->DrawLine(pD, pA, 0);
+                if (depthTest)
+                    bd->LineZOffset(0);
             }
         }
     };
@@ -2150,7 +2183,22 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         const Vector* pts = retopo->GetPointR();
         Matrix rMg = retopo->GetMg();
 
+        Vector camPos = bd->GetMg().off;
+        Bool isOrtho = (bd->GetProjection() != Pperspective);
+        Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
+
         Vector faceColors[4] = { faceColor, faceColor, faceColor, faceColor };
+
+        if (disableXRay)
+        {
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+            bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+            bd->LineZOffset(0);
+        }
+        else
+        {
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+        }
 
         // Draw translucent faces so underlying target mesh remains visible
         bd->SetTransparency(transVal);
@@ -2165,6 +2213,16 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 rMg * pts[p.c],
                 rMg * pts[p.d]
             };
+
+            if (disableXRay)
+            {
+                // Backface culling: do not draw back-facing polygons through front geometry
+                Vector fn = Cross(qPts[1] - qPts[0], qPts[2] - qPts[0]);
+                Vector polyCenter = (qPts[0] + qPts[1] + qPts[2]) * (1.0 / 3.0);
+                Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+                if (Dot(fn, toCam) <= 0.0)
+                    continue;
+            }
 
             bd->DrawPolygon(qPts, faceColors, isQuad);
         }
@@ -2185,16 +2243,25 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 rMg * pts[p.d]
             };
 
-            drawThickLine(qPts[0], qPts[1], lineWidth);
-            drawThickLine(qPts[1], qPts[2], lineWidth);
+            if (disableXRay)
+            {
+                Vector fn = Cross(qPts[1] - qPts[0], qPts[2] - qPts[0]);
+                Vector polyCenter = (qPts[0] + qPts[1] + qPts[2]) * (1.0 / 3.0);
+                Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+                if (Dot(fn, toCam) <= 0.0)
+                    continue;
+            }
+
+            drawThickLine(qPts[0], qPts[1], lineWidth, disableXRay, 2);
+            drawThickLine(qPts[1], qPts[2], lineWidth, disableXRay, 2);
             if (isQuad)
             {
-                drawThickLine(qPts[2], qPts[3], lineWidth);
-                drawThickLine(qPts[3], qPts[0], lineWidth);
+                drawThickLine(qPts[2], qPts[3], lineWidth, disableXRay, 2);
+                drawThickLine(qPts[3], qPts[0], lineWidth, disableXRay, 2);
             }
             else
             {
-                drawThickLine(qPts[2], qPts[0], lineWidth);
+                drawThickLine(qPts[2], qPts[0], lineWidth, disableXRay, 2);
             }
         }
     }
@@ -2209,6 +2276,17 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             m_shiftQuadPreview.worldPositions[3]
         };
 
+        if (disableXRay)
+        {
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+            bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+            bd->LineZOffset(0);
+        }
+        else
+        {
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+        }
+
         Vector greenColors[4] = { previewColor, previewColor, previewColor, previewColor };
 
         bd->SetTransparency(transVal);
@@ -2218,15 +2296,15 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         // Bright contour lines
         bd->SetTransparency(0);
         bd->SetPen(previewColor);
-        drawThickLine(prevPts[0], prevPts[1], hoverLineWidth);
-        drawThickLine(prevPts[1], prevPts[2], hoverLineWidth);
-        drawThickLine(prevPts[2], prevPts[3], hoverLineWidth);
-        drawThickLine(prevPts[3], prevPts[0], hoverLineWidth);
+        drawThickLine(prevPts[0], prevPts[1], hoverLineWidth, disableXRay, 3);
+        drawThickLine(prevPts[1], prevPts[2], hoverLineWidth, disableXRay, 3);
+        drawThickLine(prevPts[2], prevPts[3], hoverLineWidth, disableXRay, 3);
+        drawThickLine(prevPts[3], prevPts[0], hoverLineWidth, disableXRay, 3);
 
         // Highlight the 4 corner vertices
         for (Int32 k = 0; k < 4; ++k)
         {
-            drawPoint(prevPts[k], previewColor, pointSize + 2.0);
+            drawPoint(prevPts[k], previewColor, pointSize + 2.0, disableXRay);
         }
     }
 
@@ -2273,14 +2351,14 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         for (Int32 k = 0; k < (Int32)m_edgeCutPreview.cutSegments.GetCount(); ++k)
         {
             const CutSegment& seg = m_edgeCutPreview.cutSegments[k];
-            drawThickLine(seg.p0, seg.p1, hoverLineWidth);
+            drawThickLine(seg.p0, seg.p1, hoverLineWidth, disableXRay, 3);
         }
 
         // Draw handles at each cut point along the edges
         for (Int32 k = 0; k < (Int32)m_edgeCutPreview.cutPoints.GetCount(); ++k)
         {
             const CutPoint& cp = m_edgeCutPreview.cutPoints[k];
-            drawPoint(cp.worldPos, cutColor, pointSize);
+            drawPoint(cp.worldPos, cutColor, pointSize, disableXRay);
         }
     }
 
@@ -2292,7 +2370,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         if (m_deleteHighlight.type == DeleteTargetType::Vertex)
         {
             // Red highlighted vertex
-            drawPoint(m_deleteHighlight.worldPos0, deleteRed, pointSize + 2.0);
+            drawPoint(m_deleteHighlight.worldPos0, deleteRed, pointSize + 2.0, disableXRay);
         }
         else if (m_deleteHighlight.type == DeleteTargetType::Edge)
         {
@@ -2304,16 +2382,16 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 for (Int32 k = 0; k < (Int32)m_deleteHighlight.loopEdges.GetCount(); ++k)
                 {
                     const LoopEdge& le = m_deleteHighlight.loopEdges[k];
-                    drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth);
-                    drawPoint(le.worldPos0, deleteRed, pointSize + 1.0);
-                    drawPoint(le.worldPos1, deleteRed, pointSize + 1.0);
+                    drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth, disableXRay, 3);
+                    drawPoint(le.worldPos0, deleteRed, pointSize + 1.0, disableXRay);
+                    drawPoint(le.worldPos1, deleteRed, pointSize + 1.0, disableXRay);
                 }
             }
             else
             {
-                drawThickLine(m_deleteHighlight.worldPos0, m_deleteHighlight.worldPos1, hoverLineWidth);
-                drawPoint(m_deleteHighlight.worldPos0, deleteRed, pointSize + 1.0);
-                drawPoint(m_deleteHighlight.worldPos1, deleteRed, pointSize + 1.0);
+                drawThickLine(m_deleteHighlight.worldPos0, m_deleteHighlight.worldPos1, hoverLineWidth, disableXRay, 3);
+                drawPoint(m_deleteHighlight.worldPos0, deleteRed, pointSize + 1.0, disableXRay);
+                drawPoint(m_deleteHighlight.worldPos1, deleteRed, pointSize + 1.0, disableXRay);
             }
         }
         else if (m_deleteHighlight.type == DeleteTargetType::Polygon)
@@ -2322,22 +2400,33 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             const Vector redFace(0.9, 0.18, 0.18);
             Vector redColors[4] = { redFace, redFace, redFace, redFace };
 
+            if (disableXRay)
+            {
+                bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+                bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+                bd->LineZOffset(0);
+            }
+            else
+            {
+                bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+            }
+
             bd->SetTransparency(-140);
             bd->DrawPolygon(m_deleteHighlight.polyPts, redColors, m_deleteHighlight.polyIsQuad);
             bd->DrawArrayEnd();
 
             bd->SetTransparency(0);
             bd->SetPen(deleteRed);
-            drawThickLine(m_deleteHighlight.polyPts[0], m_deleteHighlight.polyPts[1], hoverLineWidth);
-            drawThickLine(m_deleteHighlight.polyPts[1], m_deleteHighlight.polyPts[2], hoverLineWidth);
+            drawThickLine(m_deleteHighlight.polyPts[0], m_deleteHighlight.polyPts[1], hoverLineWidth, disableXRay, 3);
+            drawThickLine(m_deleteHighlight.polyPts[1], m_deleteHighlight.polyPts[2], hoverLineWidth, disableXRay, 3);
             if (m_deleteHighlight.polyIsQuad)
             {
-                drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[3], hoverLineWidth);
-                drawThickLine(m_deleteHighlight.polyPts[3], m_deleteHighlight.polyPts[0], hoverLineWidth);
+                drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[3], hoverLineWidth, disableXRay, 3);
+                drawThickLine(m_deleteHighlight.polyPts[3], m_deleteHighlight.polyPts[0], hoverLineWidth, disableXRay, 3);
             }
             else
             {
-                drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[0], hoverLineWidth);
+                drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[0], hoverLineWidth, disableXRay, 3);
             }
         }
     }
@@ -2360,9 +2449,9 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
             bd->SetTransparency(0);
             bd->SetPen(highlightColor);
-            drawThickLine(w0, w1, hoverLineWidth);
-            drawPoint(w0, highlightColor, pointSize + 2.0);
-            drawPoint(w1, highlightColor, pointSize + 2.0);
+            drawThickLine(w0, w1, hoverLineWidth, disableXRay, 3);
+            drawPoint(w0, highlightColor, pointSize + 2.0, disableXRay);
+            drawPoint(w1, highlightColor, pointSize + 2.0, disableXRay);
         }
         else if (m_hoverTweak.mode == TweakMode::Polygon)
         {
@@ -2392,6 +2481,17 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                     wPts[k] = m_hoverTweak.polyWorld[k];
             }
 
+            if (disableXRay)
+            {
+                bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+                bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+                bd->LineZOffset(0);
+            }
+            else
+            {
+                bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+            }
+
             Vector polyColors[4] = { highlightColor, highlightColor, highlightColor, highlightColor };
             bd->SetTransparency(-140);
             bd->DrawPolygon(wPts, polyColors, m_hoverTweak.polyIsQuad);
@@ -2399,20 +2499,20 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
             bd->SetTransparency(0);
             bd->SetPen(highlightColor);
-            drawThickLine(wPts[0], wPts[1], hoverLineWidth);
-            drawThickLine(wPts[1], wPts[2], hoverLineWidth);
+            drawThickLine(wPts[0], wPts[1], hoverLineWidth, disableXRay, 3);
+            drawThickLine(wPts[1], wPts[2], hoverLineWidth, disableXRay, 3);
             if (m_hoverTweak.polyIsQuad)
             {
-                drawThickLine(wPts[2], wPts[3], hoverLineWidth);
-                drawThickLine(wPts[3], wPts[0], hoverLineWidth);
+                drawThickLine(wPts[2], wPts[3], hoverLineWidth, disableXRay, 3);
+                drawThickLine(wPts[3], wPts[0], hoverLineWidth, disableXRay, 3);
             }
             else
             {
-                drawThickLine(wPts[2], wPts[0], hoverLineWidth);
+                drawThickLine(wPts[2], wPts[0], hoverLineWidth, disableXRay, 3);
             }
             for (Int32 k = 0; k < numPts; ++k)
             {
-                drawPoint(wPts[k], highlightColor, pointSize + 2.0);
+                drawPoint(wPts[k], highlightColor, pointSize + 2.0, disableXRay);
             }
         }
     }
@@ -2429,15 +2529,26 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             Vector w1 = rMg * rPts[m_dragEdgeV1];
             bd->SetTransparency(0);
             bd->SetPen(Vector(1.0, 0.9, 0.1));
-            drawThickLine(w0, w1, hoverLineWidth);
-            drawPoint(w0, Vector(1.0, 0.9, 0.1), pointSize + 2.0);
-            drawPoint(w1, Vector(1.0, 0.9, 0.1), pointSize + 2.0);
+            drawThickLine(w0, w1, hoverLineWidth, disableXRay, 3);
+            drawPoint(w0, Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay);
+            drawPoint(w1, Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay);
         }
         else if (m_activeDragMode == TweakMode::Polygon && m_dragPolyNumPts > 0)
         {
             Vector wPts[4];
             for (Int32 k = 0; k < m_dragPolyNumPts; ++k)
                 wPts[k] = rMg * rPts[m_dragPolyPts[k]];
+
+            if (disableXRay)
+            {
+                bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+                bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+                bd->LineZOffset(0);
+            }
+            else
+            {
+                bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+            }
 
             const Vector yellowFace(0.95, 0.85, 0.2);
             Vector yColors[4] = { yellowFace, yellowFace, yellowFace, yellowFace };
@@ -2447,19 +2558,19 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
             bd->SetTransparency(0);
             bd->SetPen(Vector(1.0, 0.9, 0.1));
-            drawThickLine(wPts[0], wPts[1], hoverLineWidth);
-            drawThickLine(wPts[1], wPts[2], hoverLineWidth);
+            drawThickLine(wPts[0], wPts[1], hoverLineWidth, disableXRay, 3);
+            drawThickLine(wPts[1], wPts[2], hoverLineWidth, disableXRay, 3);
             if (m_dragPolyNumPts == 4)
             {
-                drawThickLine(wPts[2], wPts[3], hoverLineWidth);
-                drawThickLine(wPts[3], wPts[0], hoverLineWidth);
+                drawThickLine(wPts[2], wPts[3], hoverLineWidth, disableXRay, 3);
+                drawThickLine(wPts[3], wPts[0], hoverLineWidth, disableXRay, 3);
             }
             else
             {
-                drawThickLine(wPts[2], wPts[0], hoverLineWidth);
+                drawThickLine(wPts[2], wPts[0], hoverLineWidth, disableXRay, 3);
             }
             for (Int32 k = 0; k < m_dragPolyNumPts; ++k)
-                drawPoint(wPts[k], Vector(1.0, 0.9, 0.1), pointSize + 2.0);
+                drawPoint(wPts[k], Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay);
         }
     }
 
@@ -2475,29 +2586,55 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
 
         maxon::BaseArray<Vector> pointNormals;
-        if (disablePointXRay && retopo->GetPolygonCount() > 0)
+        if (disableXRay)
         {
-            Int32 polyCount = retopo->GetPolygonCount();
-            const CPolygon* polys = retopo->GetPolygonR();
             pointNormals.Resize(ptCount) iferr_ignore("Resize");
             for (Int32 i = 0; i < ptCount; ++i) pointNormals[i] = Vector(0.0);
 
-            for (Int32 p = 0; p < polyCount; ++p)
+            // Accumulate normals from retopo polygons (if any)
+            Int32 polyCount = retopo->GetPolygonCount();
+            if (polyCount > 0)
             {
-                const CPolygon& poly = polys[p];
-                Vector pA = rMg * pts[poly.a];
-                Vector pB = rMg * pts[poly.b];
-                Vector pC = rMg * pts[poly.c];
-                Vector fn = Cross(pB - pA, pC - pA);
-                Float lenSq = Dot(fn, fn);
-                if (lenSq > 1e-12)
+                const CPolygon* polys = retopo->GetPolygonR();
+                for (Int32 p = 0; p < polyCount; ++p)
                 {
-                    fn /= Sqrt(lenSq);
-                    pointNormals[poly.a] += fn;
-                    pointNormals[poly.b] += fn;
-                    pointNormals[poly.c] += fn;
-                    if (poly.c != poly.d)
-                        pointNormals[poly.d] += fn;
+                    const CPolygon& poly = polys[p];
+                    Vector pA = rMg * pts[poly.a];
+                    Vector pB = rMg * pts[poly.b];
+                    Vector pC = rMg * pts[poly.c];
+                    Vector fn = Cross(pB - pA, pC - pA);
+                    Float lenSq = Dot(fn, fn);
+                    if (lenSq > 1e-12)
+                    {
+                        fn /= Sqrt(lenSq);
+                        pointNormals[poly.a] += fn;
+                        pointNormals[poly.b] += fn;
+                        pointNormals[poly.c] += fn;
+                        if (poly.c != poly.d)
+                            pointNormals[poly.d] += fn;
+                    }
+                }
+            }
+
+            // For vertices without retopo polygon normals (e.g. isolated dots), query normal from target surface
+            PolygonObject* target = GetTargetMesh(doc, retopo);
+            if (target && target->GetPolygonCount() > 0)
+            {
+                for (Int32 i = 0; i < ptCount; ++i)
+                {
+                    if (pointNormals[i].GetSquaredLength() < 1e-6)
+                    {
+                        Vector wPos = rMg * pts[i];
+                        SnapResult proj = m_snapper.ProjectPointAlongNormal(target, wPos, Vector(0.0, 1.0, 0.0), 100.0);
+                        if (!proj.valid)
+                        {
+                            Vector s = bd->WS(wPos);
+                            if (s.z > 0.0)
+                                proj = m_snapper.RaycastSurface(bd, target, s.x, s.y);
+                        }
+                        if (proj.valid)
+                            pointNormals[i] = proj.normal;
+                    }
                 }
             }
         }
@@ -2518,7 +2655,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Edge && (m_hoverTweak.edgeV0 == i || m_hoverTweak.edgeV1 == i)) ||
                 (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Polygon && (m_hoverTweak.polyPts[0] == i || m_hoverTweak.polyPts[1] == i || m_hoverTweak.polyPts[2] == i || (m_hoverTweak.polyIsQuad && m_hoverTweak.polyPts[3] == i)));
 
-            if (disablePointXRay && !isHighlightedOrInteracting)
+            if (disableXRay && !isHighlightedOrInteracting)
             {
                 // Backface culling: normal facing away from camera
                 if (pointNormals.GetCount() == ptCount && pointNormals[i].GetSquaredLength() > 1e-6)
@@ -2531,23 +2668,23 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             if (m_weldTargetIdx == i)
             {
                 // Weld target in bright red
-                drawPoint(wPos, Vector(1.0, 0.2, 0.2), pointSize + 2.0);
+                drawPoint(wPos, Vector(1.0, 0.2, 0.2), pointSize + 2.0, disableXRay, toCam);
             }
             else if (m_activeDragMode == TweakMode::Vertex && m_dragVertexIdx == i)
             {
                 // Actively dragged vertex in yellow
-                drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0);
+                drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay, toCam);
             }
             else if (m_activeDragMode == TweakMode::Edge && (m_dragEdgeV0 == i || m_dragEdgeV1 == i))
             {
                 // Actively dragged edge vertex in yellow
-                drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0);
+                drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay, toCam);
             }
             else if (m_activeDragMode == TweakMode::Polygon &&
                      (m_dragPolyPts[0] == i || m_dragPolyPts[1] == i || m_dragPolyPts[2] == i || (m_dragPolyNumPts == 4 && m_dragPolyPts[3] == i)))
             {
                 // Actively dragged polygon vertex in yellow
-                drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0);
+                drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay, toCam);
             }
             else if (m_ctrlHeld && m_shiftHeld && m_deleteHighlight.type == DeleteTargetType::Vertex && m_deleteHighlight.index == i)
             {
@@ -2556,23 +2693,23 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             else if (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Vertex && m_hoverTweak.index == i)
             {
                 // Hovered vertex in highlight color (white)
-                drawPoint(wPos, highlightColor, pointSize + 2.0);
+                drawPoint(wPos, highlightColor, pointSize + 2.0, disableXRay, toCam);
             }
             else if (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Edge && (m_hoverTweak.edgeV0 == i || m_hoverTweak.edgeV1 == i))
             {
                 // Hovered edge vertex in highlight color
-                drawPoint(wPos, highlightColor, pointSize + 2.0);
+                drawPoint(wPos, highlightColor, pointSize + 2.0, disableXRay, toCam);
             }
             else if (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Polygon &&
                      (m_hoverTweak.polyPts[0] == i || m_hoverTweak.polyPts[1] == i || m_hoverTweak.polyPts[2] == i || (m_hoverTweak.polyIsQuad && m_hoverTweak.polyPts[3] == i)))
             {
                 // Hovered polygon vertex in highlight color
-                drawPoint(wPos, highlightColor, pointSize + 2.0);
+                drawPoint(wPos, highlightColor, pointSize + 2.0, disableXRay, toCam);
             }
             else
             {
                 // Standard retopo dot in wire color
-                drawPoint(wPos, wireColor, pointSize, disablePointXRay, toCam);
+                drawPoint(wPos, wireColor, pointSize, disableXRay, toCam);
             }
         }
     }
@@ -2580,12 +2717,13 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     // 8. Draw snap cursor indicator on surface (when placing dots)
     if (!m_shiftHeld && !m_ctrlHeld && m_activeDragMode == TweakMode::None && m_hoverTweak.mode == TweakMode::None && m_hoverSnap.valid)
     {
-        drawPoint(m_hoverSnap.worldPos, wireColor, pointSize);
+        drawPoint(m_hoverSnap.worldPos, wireColor, pointSize, disableXRay);
     }
 
     bd->SetDrawParam(DRAW_PARAMETER_USE_Z, oldUseZ);
     bd->SetDrawParam(DRAW_PARAMETER_SETZ, oldSetZ);
     bd->SetDrawParam(DRAW_PARAMETER_LINEWIDTH, oldLineWidth);
+    bd->LineZOffset(0);
     return TOOLDRAW::HANDLES | TOOLDRAW::AXIS;
 }
 

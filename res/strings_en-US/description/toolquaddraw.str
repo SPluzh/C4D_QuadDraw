@@ -4,7 +4,7 @@ STRINGTABLE toolquaddraw
 
     QUADDRAW_GROUP_DISPLAY          "Display Settings";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Disable Custom Mesh Shading";
-    QUADDRAW_DISABLE_POINT_XRAY     "Disable Point X-Ray";
+    QUADDRAW_DISABLE_XRAY           "Disable X-Ray (Tools & Shading)";
     QUADDRAW_MESH_COLOR             "Face Color";
     QUADDRAW_FACE_OPACITY           "Face Opacity";
     QUADDRAW_WIRE_COLOR             "Wire Color";
