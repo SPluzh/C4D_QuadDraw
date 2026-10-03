@@ -1208,7 +1208,11 @@ Int32 MeshBuilder::FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Flo
             hasTargetHit = true;
         }
     }
-    Float targetTol = maxon::Max(Float(15.0), Float(targetZAtCursor * 0.05));
+    Float targetTol = maxon::Max(Float(2.5), Float(targetZAtCursor * 0.005));
+
+    Vector pNear = bd->SW(Vector(screenX, screenY, 0.0));
+    Vector pFar  = bd->SW(Vector(screenX, screenY, 1000.0));
+    Vector toCam = (pNear - pFar).GetNormalized();
 
     auto calcDepth2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Float {
         Float denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);

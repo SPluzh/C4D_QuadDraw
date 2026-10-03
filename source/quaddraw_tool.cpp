@@ -1405,14 +1405,34 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             {
                 Vector curScreen = bd->WS(movePos);
                 Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 12.0, hitV, target);
-                if (weldTarget != NOTOK)
+                if (weldTarget != NOTOK && weldTarget != hitV)
                 {
-                    m_weldTargetIdx = weldTarget;
-                    Vector targetPos = retopo->GetMg() * retopo->GetPointR()[m_weldTargetIdx];
-                    m_builder.SetVertexPosition(retopo, hitV, targetPos);
-                    StatusSetText(FormatString("QuadDraw: Release to Weld vertex #@ into #@"_s, hitV, m_weldTargetIdx));
+                    Vector targetPos = retopo->GetMg() * retopo->GetPointR()[weldTarget];
+                    Vector targetScreen = bd->WS(targetPos);
+
+                    // 1. Depth check: must be on the same surface layer
+                    Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
+                    Bool depthOk = (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff);
+
+                    // 2. World distance check: 12 pixels at current depth in world units
+                    Vector p0 = bd->SW(Vector(curScreen.x, curScreen.y, curScreen.z));
+                    Vector p1 = bd->SW(Vector(curScreen.x + 12.0, curScreen.y, curScreen.z));
+                    Float maxWorldDist = (p1 - p0).GetLength() * 2.0;
+                    Bool distOk = ((targetPos - movePos).GetLength() <= maxWorldDist);
+
+                    if (depthOk && distOk)
+                    {
+                        m_weldTargetIdx = weldTarget;
+                        m_builder.SetVertexPosition(retopo, hitV, targetPos);
+                        StatusSetText(FormatString("QuadDraw: Release to Weld vertex #@ into #@"_s, hitV, m_weldTargetIdx));
+                    }
+                    else
+                    {
+                        weldTarget = NOTOK;
+                    }
                 }
-                else
+
+                if (weldTarget == NOTOK)
                 {
                     m_weldTargetIdx = NOTOK;
                     m_builder.SetVertexPosition(retopo, hitV, movePos);
@@ -1794,15 +1814,36 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
 
                 if (hasNewPos)
                 {
-                    Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 12.0, dragIdx);
-                    if (weldTarget != NOTOK)
+                    Vector curScreen = bd->WS(newPos);
+                    Int32 weldTarget = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 12.0, dragIdx, target);
+                    if (weldTarget != NOTOK && weldTarget != dragIdx)
                     {
-                        m_weldTargetIdx = weldTarget;
-                        Vector targetPos = retopo->GetMg() * retopo->GetPointR()[m_weldTargetIdx];
-                        m_builder.SetVertexPosition(retopo, dragIdx, targetPos);
-                        StatusSetText(FormatString("QuadDraw: Release to Weld vertex #@ into #@"_s, dragIdx, m_weldTargetIdx));
+                        Vector targetPos = retopo->GetMg() * retopo->GetPointR()[weldTarget];
+                        Vector targetScreen = bd->WS(targetPos);
+
+                        // 1. Depth check: must be on the same surface layer
+                        Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
+                        Bool depthOk = (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff);
+
+                        // 2. World distance check: 12 pixels at current depth in world units
+                        Vector p0 = bd->SW(Vector(curScreen.x, curScreen.y, curScreen.z));
+                        Vector p1 = bd->SW(Vector(curScreen.x + 12.0, curScreen.y, curScreen.z));
+                        Float maxWorldDist = (p1 - p0).GetLength() * 2.0;
+                        Bool distOk = ((targetPos - newPos).GetLength() <= maxWorldDist);
+
+                        if (depthOk && distOk)
+                        {
+                            m_weldTargetIdx = weldTarget;
+                            m_builder.SetVertexPosition(retopo, dragIdx, targetPos);
+                            StatusSetText(FormatString("QuadDraw: Release to Weld vertex #@ into #@"_s, dragIdx, m_weldTargetIdx));
+                        }
+                        else
+                        {
+                            weldTarget = NOTOK;
+                        }
                     }
-                    else
+
+                    if (weldTarget == NOTOK)
                     {
                         m_weldTargetIdx = NOTOK;
                         m_builder.SetVertexPosition(retopo, dragIdx, newPos);

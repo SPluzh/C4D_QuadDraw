@@ -207,6 +207,8 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
     const Vector* pts = retopoMesh->GetPointR();
     Matrix rMg = retopoMesh->GetMg();
 
+    Vector pScreen(screenX, screenY, 0.0);
+
     // 1. Check depth against Target Mesh surface under cursor (if targetMesh is provided)
     Float targetDepthAtCursor = 1e30;
     Bool hasTargetHit = false;
@@ -219,9 +221,77 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
             hasTargetHit = true;
         }
     }
-    Float targetTolerance = maxon::Max(Float(15.0), Float(targetDepthAtCursor * 0.05));
+    Float targetTolerance = maxon::Max(Float(2.5), Float(targetDepthAtCursor * 0.005));
 
-    // 2. Gather candidates within radius
+    // 2. Find front-most retopo polygon depth under cursor (to prevent picking through polygons)
+    Int32 polyCount = retopoMesh->GetPolygonCount();
+    const CPolygon* polys = retopoMesh->GetPolygonR();
+    Float retopoDepthUnderCursor = 1e30;
+    Bool hasRetopoHit = false;
+
+    auto pointInTri2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Bool {
+        auto sign = [](const Vector& p1, const Vector& p2, const Vector& p3) {
+            return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+        };
+        Float d1 = sign(p, a, b);
+        Float d2 = sign(p, b, c);
+        Float d3 = sign(p, c, a);
+        Bool hasNeg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+        Bool hasPos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+        return !(hasNeg && hasPos);
+    };
+
+    auto calcDepth2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Float {
+        Float denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (std::abs(denom) < 1e-9)
+            return (a.z + b.z + c.z) / 3.0;
+        Float invDenom = 1.0 / denom;
+        Float u = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) * invDenom;
+        Float v = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) * invDenom;
+        Float w = 1.0 - u - v;
+        return u * a.z + v * b.z + w * c.z;
+    };
+
+    for (Int32 pi = 0; pi < polyCount; ++pi)
+    {
+        const CPolygon& p = polys[pi];
+        Vector wa = rMg * pts[p.a];
+        Vector wb = rMg * pts[p.b];
+        Vector wc = rMg * pts[p.c];
+
+        Vector sa = bd->WS(wa);
+        Vector sb = bd->WS(wb);
+        Vector sc = bd->WS(wc);
+        if (sa.z > 0.0 && sb.z > 0.0 && sc.z > 0.0)
+        {
+            if (pointInTri2D(pScreen, sa, sb, sc))
+            {
+                Float z = calcDepth2D(pScreen, sa, sb, sc);
+                if (z < retopoDepthUnderCursor)
+                {
+                    retopoDepthUnderCursor = z;
+                    hasRetopoHit = true;
+                }
+            }
+            else if (p.c != p.d)
+            {
+                Vector wd = rMg * pts[p.d];
+                Vector sd = bd->WS(wd);
+                if (sd.z > 0.0 && pointInTri2D(pScreen, sa, sc, sd))
+                {
+                    Float z = calcDepth2D(pScreen, sa, sc, sd);
+                    if (z < retopoDepthUnderCursor)
+                    {
+                        retopoDepthUnderCursor = z;
+                        hasRetopoHit = true;
+                    }
+                }
+            }
+        }
+    }
+    Float retopoTolerance = maxon::Max(Float(3.0), Float(retopoDepthUnderCursor * 0.01));
+
+    // 3. Gather candidates within radius
     struct VertCandidate
     {
         Int32 index;
@@ -239,8 +309,13 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
         Vector sPos = bd->WS(wPos);
         if (sPos.z <= 0.0) continue; // Behind camera
 
+        // Target Mesh occlusion
         if (hasTargetHit && sPos.z > targetDepthAtCursor + targetTolerance)
-            continue; // Occluded by target mesh!
+            continue;
+
+        // Front Retopo Mesh occlusion (behind polygon covering cursor)
+        if (hasRetopoHit && sPos.z > retopoDepthUnderCursor + retopoTolerance)
+            continue;
 
         Float dx = sPos.x - screenX;
         Float dy = sPos.y - screenY;
@@ -259,8 +334,8 @@ Int32 SurfaceSnapper::FindNearestRetopoVertex(BaseDraw* bd, PolygonObject* retop
     if (candidates.GetCount() == 0) return NOTOK;
     if (candidates.GetCount() == 1) return candidates[0].index;
 
-    // 3. Select closest candidate in front layer (strict depth tolerance)
-    Float layerTol = maxon::Max(Float(1.0), Float(minZ * 0.01));
+    // 4. Select closest candidate in front layer (strict depth tolerance)
+    Float layerTol = maxon::Max(Float(1.5), Float(minZ * 0.005));
     Int32 bestIdx = NOTOK;
     Float bestDist = 1e30;
 
@@ -291,6 +366,8 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
     const Vector* pts = retopoMesh->GetPointR();
     Matrix mg = retopoMesh->GetMg();
 
+    Vector cursor(screenX, screenY, 0.0);
+
     // 1. Check depth against Target Mesh surface under cursor (if targetMesh is provided)
     Float targetDepthAtCursor = 1e30;
     Bool hasTargetHit = false;
@@ -303,9 +380,75 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
             hasTargetHit = true;
         }
     }
-    Float targetTolerance = maxon::Max(Float(15.0), Float(targetDepthAtCursor * 0.05));
+    Float targetTolerance = maxon::Max(Float(2.5), Float(targetDepthAtCursor * 0.005));
 
-    // 2. Gather candidates
+    // 2. Find front-most retopo polygon depth under cursor
+    Float retopoDepthUnderCursor = 1e30;
+    Bool hasRetopoHit = false;
+
+    auto pointInTri2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Bool {
+        auto sign = [](const Vector& p1, const Vector& p2, const Vector& p3) {
+            return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+        };
+        Float d1 = sign(p, a, b);
+        Float d2 = sign(p, b, c);
+        Float d3 = sign(p, c, a);
+        Bool hasNeg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+        Bool hasPos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+        return !(hasNeg && hasPos);
+    };
+
+    auto calcDepth2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Float {
+        Float denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (std::abs(denom) < 1e-9)
+            return (a.z + b.z + c.z) / 3.0;
+        Float invDenom = 1.0 / denom;
+        Float u = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) * invDenom;
+        Float v = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) * invDenom;
+        Float w = 1.0 - u - v;
+        return u * a.z + v * b.z + w * c.z;
+    };
+
+    for (Int32 pi = 0; pi < polyCount; ++pi)
+    {
+        const CPolygon& p = polys[pi];
+        Vector wa = mg * pts[p.a];
+        Vector wb = mg * pts[p.b];
+        Vector wc = mg * pts[p.c];
+
+        Vector sa = bd->WS(wa);
+        Vector sb = bd->WS(wb);
+        Vector sc = bd->WS(wc);
+        if (sa.z > 0.0 && sb.z > 0.0 && sc.z > 0.0)
+        {
+            if (pointInTri2D(cursor, sa, sb, sc))
+            {
+                Float z = calcDepth2D(cursor, sa, sb, sc);
+                if (z < retopoDepthUnderCursor)
+                {
+                    retopoDepthUnderCursor = z;
+                    hasRetopoHit = true;
+                }
+            }
+            else if (p.c != p.d)
+            {
+                Vector wd = mg * pts[p.d];
+                Vector sd = bd->WS(wd);
+                if (sd.z > 0.0 && pointInTri2D(cursor, sa, sc, sd))
+                {
+                    Float z = calcDepth2D(cursor, sa, sc, sd);
+                    if (z < retopoDepthUnderCursor)
+                    {
+                        retopoDepthUnderCursor = z;
+                        hasRetopoHit = true;
+                    }
+                }
+            }
+        }
+    }
+    Float retopoTolerance = maxon::Max(Float(3.0), Float(retopoDepthUnderCursor * 0.01));
+
+    // 3. Gather candidates
     struct EdgeCandidate
     {
         EdgeHit hit;
@@ -313,7 +456,6 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
     };
     maxon::BaseArray<EdgeCandidate> candidates;
     Float minZ = 1e30;
-    Vector cursor(screenX, screenY, 0.0);
 
     auto checkEdge = [&](Int32 u, Int32 v, Int32 polyIdx) {
         if (u < 0 || v < 0 || u == v) return;
@@ -341,8 +483,14 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
         if (d <= maxRadiusPixels)
         {
             Float projZ = sA.z + (sB.z - sA.z) * t;
+
+            // Target mesh occlusion
             if (hasTargetHit && projZ > targetDepthAtCursor + targetTolerance)
-                return; // Occluded by target mesh!
+                return;
+
+            // Retopo mesh occlusion
+            if (hasRetopoHit && projZ > retopoDepthUnderCursor + retopoTolerance)
+                return;
 
             EdgeCandidate ec;
             ec.hit.valid = true;
@@ -378,8 +526,8 @@ EdgeHit SurfaceSnapper::FindNearestRetopoEdge(BaseDraw* bd, PolygonObject* retop
     if (candidates.GetCount() == 0) return hit;
     if (candidates.GetCount() == 1) return candidates[0].hit;
 
-    // 3. Select closest candidate in front layer (strict depth tolerance)
-    Float layerTol = maxon::Max(Float(1.0), Float(minZ * 0.01));
+    // 4. Select closest candidate in front layer (strict depth tolerance)
+    Float layerTol = maxon::Max(Float(1.5), Float(minZ * 0.005));
     Float bestDist = 1e30;
 
     for (Int32 k = 0; k < (Int32)candidates.GetCount(); ++k)
