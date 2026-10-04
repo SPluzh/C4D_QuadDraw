@@ -1518,9 +1518,27 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
                 }
                 m_builder.AddQuad(retopo, q0, q1, q2, q3, edgeInfos[i].targetNorm);
             }
+
+            // Immediately retarget m_componentLoop to highlight the new outer leading edges
+            m_componentLoop.edges.Reset();
+            for (Int32 i = 0; i < (Int32)edgeInfos.GetCount(); ++i)
+            {
+                Int32 nu = getNewV(edgeInfos[i].v0);
+                Int32 nv = getNewV(edgeInfos[i].v1);
+                LoopEdge le;
+                le.v0 = nu;
+                le.v1 = nv;
+                le.worldPos0 = initPts[i < numUnique ? i : 0];
+                le.worldPos1 = initPts[i < numUnique ? i : 0];
+                m_componentLoop.edges.Append(le) iferr_ignore("Append");
+            }
         }
 
-        // Update positions during drag
+        // Update positions during drag in batch
+        Vector* ptsW = retopo->GetPointW();
+        Matrix invMg = ~retopo->GetMg();
+        Int32 curPtCount = retopo->GetPointCount();
+
         for (Int32 k = 0; k < numUnique; ++k)
         {
             Float currSx = sPts[k].x + totalDx;
@@ -1556,9 +1574,26 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
                 gotPos = true;
             }
 
-            if (newVerts[k] != NOTOK)
+            Int32 nv = newVerts[k];
+            if (nv != NOTOK && ptsW && nv >= 0 && nv < curPtCount)
             {
-                m_builder.SetVertexPosition(retopo, newVerts[k], newPos);
+                ptsW[nv] = invMg * newPos;
+            }
+        }
+
+        retopo->Message(MSG_UPDATE);
+
+        // Update live world positions of leading edges
+        Matrix rMgLive = retopo->GetMg();
+        const Vector* ptsLive = retopo->GetPointR();
+        for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
+        {
+            Int32 u = m_componentLoop.edges[i].v0;
+            Int32 v = m_componentLoop.edges[i].v1;
+            if (u >= 0 && u < curPtCount && v >= 0 && v < curPtCount && ptsLive)
+            {
+                m_componentLoop.edges[i].worldPos0 = rMgLive * ptsLive[u];
+                m_componentLoop.edges[i].worldPos1 = rMgLive * ptsLive[v];
             }
         }
 
@@ -1774,6 +1809,9 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
             doc->AddUndo(UNDOTYPE::CHANGE, retopo);
         }
 
+        Vector* ptsW = retopo->GetPointW();
+        Matrix invMg = ~retopo->GetMg();
+
         for (Int32 k = 0; k < numVerts; ++k)
         {
             Float currSx = sPts[k].x + totalDx;
@@ -1809,7 +1847,26 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
                 gotPos = true;
             }
 
-            m_builder.SetVertexPosition(retopo, loopVerts[k], newPos);
+            if (ptsW && loopVerts[k] >= 0 && loopVerts[k] < ptCount)
+            {
+                ptsW[loopVerts[k]] = invMg * newPos;
+            }
+        }
+
+        retopo->Message(MSG_UPDATE);
+
+        // Update live world positions of component loop edges so overlay follows seamlessly
+        Matrix rMgLive = retopo->GetMg();
+        const Vector* ptsLive = retopo->GetPointR();
+        for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
+        {
+            Int32 u = m_componentLoop.edges[i].v0;
+            Int32 v = m_componentLoop.edges[i].v1;
+            if (u >= 0 && u < ptCount && v >= 0 && v < ptCount && ptsLive)
+            {
+                m_componentLoop.edges[i].worldPos0 = rMgLive * ptsLive[u];
+                m_componentLoop.edges[i].worldPos1 = rMgLive * ptsLive[v];
+            }
         }
 
         StatusSetText(FormatString("QuadDraw: Moving loop (@ vertices)..."_s, numVerts));
@@ -3573,20 +3630,24 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             bd->SetTransparency(0);
             bd->SetPen(highlightColor);
 
+            Matrix rMg = retopo ? retopo->GetMg() : Matrix();
+            const Vector* rPts = retopo ? retopo->GetPointR() : nullptr;
+            Int32 ptCount = retopo ? retopo->GetPointCount() : 0;
+
             for (Int32 k = 0; k < (Int32)m_componentLoop.edges.GetCount(); ++k)
             {
-                const LoopEdge& le = m_componentLoop.edges[k];
-                drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth + 0.5, disableXRay, 3);
+                LoopEdge& le = m_componentLoop.edges[k];
+                Vector w0 = (rPts && le.v0 >= 0 && le.v0 < ptCount) ? (rMg * rPts[le.v0]) : le.worldPos0;
+                Vector w1 = (rPts && le.v1 >= 0 && le.v1 < ptCount) ? (rMg * rPts[le.v1]) : le.worldPos1;
+                drawThickLine(w0, w1, hoverLineWidth + 0.5, disableXRay, 3);
             }
 
-            if (retopo)
+            if (rPts)
             {
-                Matrix rMg = retopo->GetMg();
-                const Vector* rPts = retopo->GetPointR();
                 for (Int32 k = 0; k < (Int32)m_componentLoop.vertices.GetCount(); ++k)
                 {
                     Int32 vi = m_componentLoop.vertices[k];
-                    if (vi >= 0 && vi < retopo->GetPointCount())
+                    if (vi >= 0 && vi < ptCount)
                     {
                         Vector wPos = rMg * rPts[vi];
                         drawPoint(wPos, highlightColor, pointSize + 3.0, disableXRay);
@@ -3600,12 +3661,18 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             bd->SetTransparency(0);
             bd->SetPen(highlightColor);
 
+            Matrix rMg = retopo ? retopo->GetMg() : Matrix();
+            const Vector* rPts = retopo ? retopo->GetPointR() : nullptr;
+            Int32 ptCount = retopo ? retopo->GetPointCount() : 0;
+
             for (Int32 k = 0; k < (Int32)m_componentLoop.edges.GetCount(); ++k)
             {
-                const LoopEdge& le = m_componentLoop.edges[k];
-                drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth + 1.2, disableXRay, 3);
-                drawPoint(le.worldPos0, highlightColor, pointSize + 1.5, disableXRay);
-                drawPoint(le.worldPos1, highlightColor, pointSize + 1.5, disableXRay);
+                LoopEdge& le = m_componentLoop.edges[k];
+                Vector w0 = (rPts && le.v0 >= 0 && le.v0 < ptCount) ? (rMg * rPts[le.v0]) : le.worldPos0;
+                Vector w1 = (rPts && le.v1 >= 0 && le.v1 < ptCount) ? (rMg * rPts[le.v1]) : le.worldPos1;
+                drawThickLine(w0, w1, hoverLineWidth + 1.2, disableXRay, 3);
+                drawPoint(w0, highlightColor, pointSize + 1.5, disableXRay);
+                drawPoint(w1, highlightColor, pointSize + 1.5, disableXRay);
             }
         }
         else if (m_componentLoop.type == ComponentLoopType::Polygon)
