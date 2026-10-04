@@ -39,6 +39,13 @@ private:
     Bool           DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
                                      PolygonObject* retopo, PolygonObject* target, Int32 v0, Int32 v1,
                                      Float mx, Float my, Int32 dragButton);
+    Bool           DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                         PolygonObject* retopo, PolygonObject* target,
+                                         const maxon::BaseArray<LoopEdge>& loopEdges,
+                                         Float mx, Float my, Int32 dragButton);
+    Bool           DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                           PolygonObject* retopo, PolygonObject* target,
+                                           Float mx, Float my, Int32 dragButton);
 
     SurfaceSnapper m_snapper;
     MeshBuilder    m_builder;

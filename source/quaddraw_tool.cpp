@@ -691,13 +691,13 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
         String status;
         if (m_componentLoop.type == ComponentLoopType::Vertex)
-            status = FormatString("QuadDraw [LOOP] | Vertex Loop (@ vertices) | Ctrl+LMB: Select Loop"_s, (Int32)m_componentLoop.vertices.GetCount());
+            status = FormatString("QuadDraw [LOOP] | Vertex Loop (@ vertices) | Ctrl+LMB: Select / Drag: Move Loop"_s, (Int32)m_componentLoop.vertices.GetCount());
         else if (m_componentLoop.type == ComponentLoopType::Edge)
-            status = FormatString("QuadDraw [LOOP] | Edge Loop (@ edges) | Ctrl+LMB: Select Loop"_s, (Int32)m_componentLoop.edges.GetCount());
+            status = FormatString("QuadDraw [LOOP] | Edge Loop (@ edges) | Ctrl+LMB: Select / Drag: Extrude or Move Loop"_s, (Int32)m_componentLoop.edges.GetCount());
         else if (m_componentLoop.type == ComponentLoopType::Polygon)
-            status = FormatString("QuadDraw [LOOP] | Polygon Loop (@ polygons) | Ctrl+LMB: Select Loop"_s, (Int32)m_componentLoop.polygons.GetCount());
+            status = FormatString("QuadDraw [LOOP] | Polygon Loop (@ polygons) | Ctrl+LMB: Select / Drag: Move Loop"_s, (Int32)m_componentLoop.polygons.GetCount());
         else
-            status = "QuadDraw [LOOP] | Hover over Point, Edge, or Polygon to highlight loop (Ctrl+LMB to select)"_s;
+            status = "QuadDraw [LOOP] | Hover over Point, Edge, or Polygon to highlight loop (Ctrl+LMB to select / drag)"_s;
 
         StatusSetText(status);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -1355,6 +1355,578 @@ Bool QuadDrawToolData::DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data,
     return true;
 }
 
+Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                            PolygonObject* retopo, PolygonObject* target,
+                                            const maxon::BaseArray<LoopEdge>& loopEdges,
+                                            Float mx, Float my, Int32 dragButton)
+{
+    if (!doc || !bd || !win || !retopo || loopEdges.GetCount() == 0) return false;
+
+    Int32 polyCount = retopo->GetPolygonCount();
+    const CPolygon* oldPolys = retopo->GetPolygonR();
+    const Vector* pts = retopo->GetPointR();
+    Matrix rMg = retopo->GetMg();
+
+    struct LoopExtrudeEdgeInfo
+    {
+        Int32 v0 = NOTOK;
+        Int32 v1 = NOTOK;
+        Int32 adjPoly = NOTOK;
+        Bool adjReversed = false;
+        Vector targetNorm = Vector(0.0, 1.0, 0.0);
+    };
+
+    maxon::BaseArray<LoopExtrudeEdgeInfo> edgeInfos;
+    edgeInfos.Resize(loopEdges.GetCount()) iferr_ignore("Resize");
+
+    for (Int32 i = 0; i < (Int32)loopEdges.GetCount(); ++i)
+    {
+        Int32 u = loopEdges[i].v0;
+        Int32 v = loopEdges[i].v1;
+        Int32 edgePolyCount = 0;
+        Int32 adjPolyIdx = NOTOK;
+        Bool adjReversed = false;
+
+        for (Int32 p = 0; p < polyCount; ++p)
+        {
+            const CPolygon& poly = oldPolys[p];
+            if (PolygonHasEdge(poly, u, v))
+            {
+                edgePolyCount++;
+                adjPolyIdx = p;
+                Bool isQuad = (poly.c != poly.d);
+                if ((poly.a == v && poly.b == u) || (poly.b == v && poly.c == u) ||
+                    (isQuad && poly.c == v && poly.d == u) || (isQuad && poly.d == v && poly.a == u) ||
+                    (!isQuad && poly.c == v && poly.a == u))
+                {
+                    adjReversed = true;
+                }
+            }
+        }
+
+        if (edgePolyCount != 1)
+        {
+            // Not a pure border edge loop! Fallback to moving the loop.
+            return false;
+        }
+
+        edgeInfos[i].v0 = u;
+        edgeInfos[i].v1 = v;
+        edgeInfos[i].adjPoly = adjPolyIdx;
+        edgeInfos[i].adjReversed = adjReversed;
+
+        Vector n(0.0, 1.0, 0.0);
+        if (adjPolyIdx != NOTOK)
+        {
+            const CPolygon& p = oldPolys[adjPolyIdx];
+            Vector pA = rMg * pts[p.a];
+            Vector pB = rMg * pts[p.b];
+            Vector pC = rMg * pts[p.c];
+            Vector crossN = Cross(pB - pA, pC - pA);
+            if (crossN.GetSquaredLength() > 1e-6)
+                n = crossN.GetNormalized();
+        }
+        edgeInfos[i].targetNorm = n;
+    }
+
+    // Collect all unique vertices from loopEdges
+    maxon::BaseArray<Int32> uniqueVerts;
+    for (Int32 i = 0; i < (Int32)loopEdges.GetCount(); ++i)
+    {
+        auto addU = [&](Int32 v) {
+            for (Int32 k = 0; k < (Int32)uniqueVerts.GetCount(); ++k)
+                if (uniqueVerts[k] == v) return;
+            uniqueVerts.Append(v) iferr_ignore("Append");
+        };
+        addU(loopEdges[i].v0);
+        addU(loopEdges[i].v1);
+    }
+
+    Int32 numUnique = (Int32)uniqueVerts.GetCount();
+    maxon::BaseArray<Vector> initPts;
+    maxon::BaseArray<Vector> sPts;
+    maxon::BaseArray<Vector> lastPts;
+    maxon::BaseArray<Vector> lastNorms;
+    initPts.Resize(numUnique) iferr_ignore("Resize");
+    sPts.Resize(numUnique) iferr_ignore("Resize");
+    lastPts.Resize(numUnique) iferr_ignore("Resize");
+    lastNorms.Resize(numUnique) iferr_ignore("Resize");
+
+    for (Int32 k = 0; k < numUnique; ++k)
+    {
+        initPts[k] = rMg * pts[uniqueVerts[k]];
+        sPts[k] = bd->WS(initPts[k]);
+        lastPts[k] = initPts[k];
+        lastNorms[k] = Vector(0.0, 1.0, 0.0);
+    }
+
+    BaseContainer device;
+    win->MouseDragStart(dragButton, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+    Float dx, dy;
+    Float totalDx = 0.0, totalDy = 0.0;
+    Bool isDragging = false;
+    const Float DRAG_THRESHOLD = 3.0;
+
+    maxon::BaseArray<Int32> newVerts;
+    newVerts.Resize(numUnique) iferr_ignore("Resize");
+    for (Int32 k = 0; k < numUnique; ++k) newVerts[k] = NOTOK;
+
+    auto getNewV = [&](Int32 origV) -> Int32 {
+        for (Int32 k = 0; k < numUnique; ++k)
+            if (uniqueVerts[k] == origV) return newVerts[k];
+        return NOTOK;
+    };
+
+    while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+    {
+        if (dx == 0.0 && dy == 0.0) continue;
+        totalDx += dx;
+        totalDy += dy;
+
+        if (!isDragging)
+        {
+            Float distSoFar = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+            if (distSoFar < DRAG_THRESHOLD)
+                continue;
+
+            isDragging = true;
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+
+            // Allocate new vertices
+            for (Int32 k = 0; k < numUnique; ++k)
+            {
+                newVerts[k] = m_builder.AddVertex(retopo, initPts[k]);
+            }
+
+            // Create quads for each border edge
+            for (Int32 i = 0; i < (Int32)edgeInfos.GetCount(); ++i)
+            {
+                Int32 u = edgeInfos[i].v0;
+                Int32 v = edgeInfos[i].v1;
+                Int32 nu = getNewV(u);
+                Int32 nv = getNewV(v);
+                Int32 q0, q1, q2, q3;
+                if (edgeInfos[i].adjReversed)
+                {
+                    q0 = u; q1 = v; q2 = nv; q3 = nu;
+                }
+                else
+                {
+                    q0 = v; q1 = u; q2 = nu; q3 = nv;
+                }
+                m_builder.AddQuad(retopo, q0, q1, q2, q3, edgeInfos[i].targetNorm);
+            }
+        }
+
+        // Update positions during drag
+        for (Int32 k = 0; k < numUnique; ++k)
+        {
+            Float currSx = sPts[k].x + totalDx;
+            Float currSy = sPts[k].y + totalDy;
+            Vector newPos = initPts[k];
+            Bool gotPos = false;
+
+            if (target)
+            {
+                SnapResult h = m_snapper.RaycastSurface(bd, target, currSx, currSy);
+                if (h.valid)
+                {
+                    newPos = h.worldPos;
+                    lastPts[k] = newPos;
+                    lastNorms[k] = h.normal;
+                    gotPos = true;
+                }
+                else
+                {
+                    Vector cand = bd->SW_Reference(currSx, currSy, lastPts[k]);
+                    SnapResult pr = m_snapper.ProjectPointAlongNormal(target, cand, lastNorms[k], 500.0);
+                    if (pr.valid)
+                    {
+                        newPos = pr.worldPos;
+                        gotPos = true;
+                    }
+                }
+            }
+
+            if (!gotPos && bd)
+            {
+                newPos = bd->SW_Reference(currSx, currSy, initPts[k]);
+                gotPos = true;
+            }
+
+            if (newVerts[k] != NOTOK)
+            {
+                m_builder.SetVertexPosition(retopo, newVerts[k], newPos);
+            }
+        }
+
+        StatusSetText(FormatString("QuadDraw: Extruding Border Loop (@ quads)..."_s, (Int32)edgeInfos.GetCount()));
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    }
+
+    MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+
+    if (!isDragging)
+    {
+        // Click without drag: Perform Selection!
+        EdgeBaseSelect* edgeSel = retopo->GetWritableEdgeS();
+        if (edgeSel)
+        {
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+            Neighbor neighbor;
+            neighbor.Init(retopo->GetPointCount(), retopo->GetPolygonR(), retopo->GetPolygonCount(), nullptr);
+            for (Int32 i = 0; i < (Int32)loopEdges.GetCount(); ++i)
+            {
+                Int32 u = loopEdges[i].v0;
+                Int32 v = loopEdges[i].v1;
+                Int32 pA = NOTOK, pB = NOTOK;
+                neighbor.GetEdgePolys(u, v, &pA, &pB);
+                auto selectPolyEdge = [&](Int32 pIdx) {
+                    if (pIdx == NOTOK || pIdx >= retopo->GetPolygonCount()) return;
+                    const CPolygon& poly = retopo->GetPolygonR()[pIdx];
+                    Int32 vArr[4] = { poly.a, poly.b, poly.c, poly.d };
+                    Int32 numE = (poly.c != poly.d) ? 4 : 3;
+                    for (Int32 e = 0; e < numE; ++e)
+                    {
+                        Int32 ea = vArr[e];
+                        Int32 eb = vArr[(e + 1) % numE];
+                        if ((ea == u && eb == v) || (ea == v && eb == u))
+                        {
+                            edgeSel->Select(pIdx * 4 + e);
+                            break;
+                        }
+                    }
+                };
+                selectPolyEdge(pA);
+                selectPolyEdge(pB);
+            }
+            doc->EndUndo();
+            EventAdd();
+            StatusSetText(FormatString("QuadDraw: Selected Edge Loop (@ edges)"_s, (Int32)loopEdges.GetCount()));
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        }
+        return true;
+    }
+
+    if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+    {
+        doc->DoUndo(true);
+        StatusSetText("QuadDraw: Extrude canceled."_s);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    // Auto-weld newly created vertices on drop
+    for (Int32 k = 0; k < numUnique; ++k)
+    {
+        Int32 nv = newVerts[k];
+        if (nv == NOTOK || nv >= retopo->GetPointCount()) continue;
+        Vector wPos = retopo->GetMg() * retopo->GetPointR()[nv];
+        Vector sPos = bd->WS(wPos);
+        if (sPos.z <= 0.0) continue;
+
+        Int32 targetV = m_snapper.FindNearestRetopoVertex(bd, retopo, sPos.x, sPos.y, 14.0, nv, target);
+        if (targetV != NOTOK)
+        {
+            Bool isNewVert = false;
+            for (Int32 j = 0; j < numUnique; ++j)
+                if (newVerts[j] == targetV) { isNewVert = true; break; }
+
+            if (!isNewVert)
+            {
+                m_builder.WeldVertices(retopo, nv, targetV);
+                newVerts[k] = targetV;
+            }
+        }
+    }
+
+    doc->EndUndo();
+    EventAdd();
+    StatusSetText(FormatString("QuadDraw: Extruded Border Loop (@ quads)."_s, (Int32)edgeInfos.GetCount()));
+
+    // Update m_componentLoop with the newly created outer border edges
+    m_componentLoop.edges.Reset();
+    Matrix mg = retopo->GetMg();
+    const Vector* finalPts = retopo->GetPointR();
+    for (Int32 i = 0; i < (Int32)edgeInfos.GetCount(); ++i)
+    {
+        Int32 nu = getNewV(edgeInfos[i].v0);
+        Int32 nv = getNewV(edgeInfos[i].v1);
+        if (nu != NOTOK && nv != NOTOK && nu != nv && nu < retopo->GetPointCount() && nv < retopo->GetPointCount())
+        {
+            LoopEdge le;
+            le.v0 = nu;
+            le.v1 = nv;
+            le.worldPos0 = mg * finalPts[nu];
+            le.worldPos1 = mg * finalPts[nv];
+            m_componentLoop.edges.Append(le) iferr_ignore("Append");
+        }
+    }
+
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    return true;
+}
+
+Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                              PolygonObject* retopo, PolygonObject* target,
+                                              Float mx, Float my, Int32 dragButton)
+{
+    if (!doc || !bd || !win || !retopo || m_componentLoop.type == ComponentLoopType::None) return false;
+
+    Int32 polyCount = retopo->GetPolygonCount();
+    Int32 ptCount = retopo->GetPointCount();
+    if (ptCount == 0) return false;
+
+    const CPolygon* oldPolys = retopo->GetPolygonR();
+    const Vector* pts = retopo->GetPointR();
+    Matrix rMg = retopo->GetMg();
+
+    maxon::BaseArray<Int32> loopVerts;
+    if (m_componentLoop.type == ComponentLoopType::Edge)
+    {
+        for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
+        {
+            auto addV = [&](Int32 v) {
+                if (v < 0 || v >= ptCount) return;
+                for (Int32 k = 0; k < (Int32)loopVerts.GetCount(); ++k)
+                    if (loopVerts[k] == v) return;
+                loopVerts.Append(v) iferr_ignore("Append");
+            };
+            addV(m_componentLoop.edges[i].v0);
+            addV(m_componentLoop.edges[i].v1);
+        }
+    }
+    else if (m_componentLoop.type == ComponentLoopType::Polygon)
+    {
+        for (Int32 i = 0; i < (Int32)m_componentLoop.polygons.GetCount(); ++i)
+        {
+            Int32 pIdx = m_componentLoop.polygons[i];
+            if (pIdx < 0 || pIdx >= polyCount) continue;
+            const CPolygon& p = oldPolys[pIdx];
+            Int32 numPts = (p.c != p.d) ? 4 : 3;
+            Int32 pVerts[4] = { p.a, p.b, p.c, p.d };
+            for (Int32 j = 0; j < numPts; ++j)
+            {
+                Int32 v = pVerts[j];
+                if (v < 0 || v >= ptCount) continue;
+                Bool found = false;
+                for (Int32 k = 0; k < (Int32)loopVerts.GetCount(); ++k)
+                    if (loopVerts[k] == v) { found = true; break; }
+                if (!found) loopVerts.Append(v) iferr_ignore("Append");
+            }
+        }
+    }
+    else if (m_componentLoop.type == ComponentLoopType::Vertex)
+    {
+        for (Int32 i = 0; i < (Int32)m_componentLoop.vertices.GetCount(); ++i)
+        {
+            Int32 v = m_componentLoop.vertices[i];
+            if (v >= 0 && v < ptCount)
+                loopVerts.Append(v) iferr_ignore("Append");
+        }
+    }
+
+    Int32 numVerts = (Int32)loopVerts.GetCount();
+    if (numVerts == 0) return false;
+
+    maxon::BaseArray<Vector> initPts;
+    maxon::BaseArray<Vector> sPts;
+    maxon::BaseArray<Vector> lastPts;
+    maxon::BaseArray<Vector> lastNorms;
+    initPts.Resize(numVerts) iferr_ignore("Resize");
+    sPts.Resize(numVerts) iferr_ignore("Resize");
+    lastPts.Resize(numVerts) iferr_ignore("Resize");
+    lastNorms.Resize(numVerts) iferr_ignore("Resize");
+
+    for (Int32 k = 0; k < numVerts; ++k)
+    {
+        initPts[k] = rMg * pts[loopVerts[k]];
+        sPts[k] = bd->WS(initPts[k]);
+        lastPts[k] = initPts[k];
+        lastNorms[k] = Vector(0.0, 1.0, 0.0);
+    }
+
+    BaseContainer device;
+    win->MouseDragStart(dragButton, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+    Float dx, dy;
+    Float totalDx = 0.0, totalDy = 0.0;
+    Bool isDragging = false;
+    const Float DRAG_THRESHOLD = 3.0;
+
+    while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+    {
+        if (dx == 0.0 && dy == 0.0) continue;
+        totalDx += dx;
+        totalDy += dy;
+
+        if (!isDragging)
+        {
+            Float distSoFar = std::sqrt(totalDx * totalDx + totalDy * totalDy);
+            if (distSoFar < DRAG_THRESHOLD)
+                continue;
+
+            isDragging = true;
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+        }
+
+        for (Int32 k = 0; k < numVerts; ++k)
+        {
+            Float currSx = sPts[k].x + totalDx;
+            Float currSy = sPts[k].y + totalDy;
+            Vector newPos = initPts[k];
+            Bool gotPos = false;
+
+            if (target)
+            {
+                SnapResult h = m_snapper.RaycastSurface(bd, target, currSx, currSy);
+                if (h.valid)
+                {
+                    newPos = h.worldPos;
+                    lastPts[k] = newPos;
+                    lastNorms[k] = h.normal;
+                    gotPos = true;
+                }
+                else
+                {
+                    Vector cand = bd->SW_Reference(currSx, currSy, lastPts[k]);
+                    SnapResult pr = m_snapper.ProjectPointAlongNormal(target, cand, lastNorms[k], 500.0);
+                    if (pr.valid)
+                    {
+                        newPos = pr.worldPos;
+                        gotPos = true;
+                    }
+                }
+            }
+
+            if (!gotPos && bd)
+            {
+                newPos = bd->SW_Reference(currSx, currSy, initPts[k]);
+                gotPos = true;
+            }
+
+            m_builder.SetVertexPosition(retopo, loopVerts[k], newPos);
+        }
+
+        StatusSetText(FormatString("QuadDraw: Moving loop (@ vertices)..."_s, numVerts));
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    }
+
+    MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+
+    if (!isDragging)
+    {
+        // Click without drag: Perform Selection!
+        if (m_componentLoop.type == ComponentLoopType::Edge)
+        {
+            EdgeBaseSelect* edgeSel = retopo->GetWritableEdgeS();
+            if (edgeSel)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                Neighbor neighbor;
+                neighbor.Init(ptCount, oldPolys, polyCount, nullptr);
+                for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
+                {
+                    Int32 u = m_componentLoop.edges[i].v0;
+                    Int32 v = m_componentLoop.edges[i].v1;
+                    Int32 pA = NOTOK, pB = NOTOK;
+                    neighbor.GetEdgePolys(u, v, &pA, &pB);
+                    auto selectPolyEdge = [&](Int32 pIdx) {
+                        if (pIdx == NOTOK || pIdx >= polyCount) return;
+                        const CPolygon& poly = oldPolys[pIdx];
+                        Int32 vArr[4] = { poly.a, poly.b, poly.c, poly.d };
+                        Int32 numE = (poly.c != poly.d) ? 4 : 3;
+                        for (Int32 e = 0; e < numE; ++e)
+                        {
+                            Int32 ea = vArr[e];
+                            Int32 eb = vArr[(e + 1) % numE];
+                            if ((ea == u && eb == v) || (ea == v && eb == u))
+                            {
+                                edgeSel->Select(pIdx * 4 + e);
+                                break;
+                            }
+                        }
+                    };
+                    selectPolyEdge(pA);
+                    selectPolyEdge(pB);
+                }
+                doc->EndUndo();
+                EventAdd();
+                StatusSetText(FormatString("QuadDraw: Selected Edge Loop (@ edges)"_s, (Int32)m_componentLoop.edges.GetCount()));
+            }
+        }
+        else if (m_componentLoop.type == ComponentLoopType::Polygon)
+        {
+            BaseSelect* polySel = retopo->GetWritablePolygonS();
+            if (polySel)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                for (Int32 i = 0; i < (Int32)m_componentLoop.polygons.GetCount(); ++i)
+                {
+                    polySel->Select(m_componentLoop.polygons[i]);
+                }
+                doc->EndUndo();
+                EventAdd();
+                StatusSetText(FormatString("QuadDraw: Selected Polygon Loop (@ polygons)"_s, (Int32)m_componentLoop.polygons.GetCount()));
+            }
+        }
+        else if (m_componentLoop.type == ComponentLoopType::Vertex)
+        {
+            BaseSelect* ptSel = retopo->GetWritablePointS();
+            if (ptSel)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                for (Int32 i = 0; i < (Int32)m_componentLoop.vertices.GetCount(); ++i)
+                {
+                    ptSel->Select(m_componentLoop.vertices[i]);
+                }
+                doc->EndUndo();
+                EventAdd();
+                StatusSetText(FormatString("QuadDraw: Selected Vertex Loop (@ vertices)"_s, (Int32)m_componentLoop.vertices.GetCount()));
+            }
+        }
+
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+    {
+        doc->DoUndo(true);
+        StatusSetText("QuadDraw: Move canceled."_s);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    doc->EndUndo();
+    EventAdd();
+    StatusSetText(FormatString("QuadDraw: Loop moved (@ vertices)."_s, numVerts));
+
+    // Update world positions in m_componentLoop
+    Matrix mg = retopo->GetMg();
+    const Vector* finalPts = retopo->GetPointR();
+    for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
+    {
+        Int32 u = m_componentLoop.edges[i].v0;
+        Int32 v = m_componentLoop.edges[i].v1;
+        if (u < retopo->GetPointCount() && v < retopo->GetPointCount())
+        {
+            m_componentLoop.edges[i].worldPos0 = mg * finalPts[u];
+            m_componentLoop.edges[i].worldPos1 = mg * finalPts[v];
+        }
+    }
+
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    return true;
+}
+
 Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, const BaseContainer& msg)
 {
     if (!doc || !bd || !win) return false;
@@ -1442,13 +2014,19 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // =========================================================================
-    // ACTION 0B: MMB -> EXTRUDE HIGHLIGHTED/SELECTED BORDER EDGE
+    // ACTION 0B: MMB -> EXTRUDE HIGHLIGHTED/SELECTED BORDER EDGE OR EDGE LOOP
     // =========================================================================
     if (channel == BFM_INPUT_MOUSEMIDDLE && !shiftPressed)
     {
         PolygonObject* retopo = GetEditableMesh(doc, true);
         if (!retopo) return false;
         PolygonObject* target = GetTargetMesh(doc, retopo);
+
+        if ((qualifier & QCTRL) && m_componentLoop.edges.GetCount() > 0)
+        {
+            if (DoExtrudeEdgeLoopDrag(doc, data, bd, win, retopo, target, m_componentLoop.edges, mx, my, KEY_MMIDDLE))
+                return true;
+        }
 
         Int32 edgeV0 = NOTOK;
         Int32 edgeV1 = NOTOK;
@@ -1625,86 +2203,107 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // ==========================================
-    // ACTION 2: CTRL (alone) + LMB -> COMPONENT LOOP SELECTION
+    // ACTION 2: CTRL (alone) + LMB -> COMPONENT LOOP (SELECT / EXTRUDE / MOVE)
     // ==========================================
     if ((qualifier & QCTRL) && !(qualifier & QSHIFT))
     {
+        // If m_componentLoop was not detected yet (e.g. rapid click), detect on the spot
+        if (m_componentLoop.type == ComponentLoopType::None)
+        {
+            Float polyZ = 1e30;
+            Int32 underPoly = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper, &polyZ);
+            if (underPoly != NOTOK && underPoly < retopo->GetPolygonCount())
+            {
+                const CPolygon& p = retopo->GetPolygonR()[underPoly];
+                const Vector* rPts = retopo->GetPointR();
+                Matrix rMg = retopo->GetMg();
+
+                Int32 polyVerts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+                Int32 vertCount = (p.c != p.d) ? 4 : 3;
+
+                Int32 bestPolyV = NOTOK;
+                Float bestVertDist = 12.0;
+                for (Int32 vi = 0; vi < vertCount; ++vi)
+                {
+                    Int32 vIdx = polyVerts[vi];
+                    if (vIdx == NOTOK) continue;
+                    Vector sPos = bd->WS(rMg * rPts[vIdx]);
+                    if (sPos.z <= 0.0) continue;
+                    Float dx = sPos.x - mx, dy = sPos.y - my;
+                    Float d = std::sqrt(dx * dx + dy * dy);
+                    if (d <= bestVertDist)
+                    {
+                        bestVertDist = d;
+                        bestPolyV = vIdx;
+                    }
+                }
+
+                if (bestPolyV != NOTOK)
+                {
+                    m_componentLoop.type = ComponentLoopType::Vertex;
+                    m_componentLoop.sourceIndex = bestPolyV;
+                    m_componentLoop.vertices = m_builder.FindVertexLoop(bd, retopo, bestPolyV, mx, my, &m_componentLoop.edges);
+                }
+                else
+                {
+                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, mx, my);
+                    if (polyEdge.valid && polyEdge.dist <= 10.0)
+                    {
+                        m_componentLoop.type = ComponentLoopType::Edge;
+                        m_componentLoop.sourceIndex = polyEdge.v0;
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
+                        m_componentLoop.edges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    }
+                    else
+                    {
+                        EdgeHit pe = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, mx, my);
+                        Int32 enterV0 = pe.valid ? pe.v0 : p.a;
+                        Int32 enterV1 = pe.valid ? pe.v1 : p.b;
+
+                        m_componentLoop.type = ComponentLoopType::Polygon;
+                        m_componentLoop.sourceIndex = underPoly;
+                        m_componentLoop.polygons = m_builder.FindPolygonLoop(retopo, underPoly, enterV0, enterV1);
+                    }
+                }
+            }
+            else
+            {
+                Int32 nearVertex = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 10.0, NOTOK, target);
+                if (nearVertex != NOTOK)
+                {
+                    m_componentLoop.type = ComponentLoopType::Vertex;
+                    m_componentLoop.sourceIndex = nearVertex;
+                    m_componentLoop.vertices = m_builder.FindVertexLoop(bd, retopo, nearVertex, mx, my, &m_componentLoop.edges);
+                }
+                else
+                {
+                    EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 10.0, target);
+                    if (edgeHit.valid)
+                    {
+                        m_componentLoop.type = ComponentLoopType::Edge;
+                        m_componentLoop.sourceIndex = edgeHit.v0;
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, edgeHit.v0, edgeHit.v1);
+                        m_componentLoop.edges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    }
+                }
+            }
+        }
+
         if (m_componentLoop.type == ComponentLoopType::Edge && m_componentLoop.edges.GetCount() > 0)
         {
-            doc->StartUndo();
-            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
-            EdgeBaseSelect* edgeSel = retopo->GetWritableEdgeS();
-            if (edgeSel)
+            Bool extrudeEnabled = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+            if (extrudeEnabled)
             {
-                Neighbor neighbor;
-                neighbor.Init(retopo->GetPointCount(), retopo->GetPolygonR(), retopo->GetPolygonCount(), nullptr);
-                for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
-                {
-                    Int32 u = m_componentLoop.edges[i].v0;
-                    Int32 v = m_componentLoop.edges[i].v1;
-                    Int32 pA = NOTOK, pB = NOTOK;
-                    neighbor.GetEdgePolys(u, v, &pA, &pB);
-                    auto selectPolyEdge = [&](Int32 pIdx) {
-                        if (pIdx == NOTOK || pIdx >= retopo->GetPolygonCount()) return;
-                        const CPolygon& poly = retopo->GetPolygonR()[pIdx];
-                        Int32 vArr[4] = { poly.a, poly.b, poly.c, poly.d };
-                        Int32 numE = (poly.c != poly.d) ? 4 : 3;
-                        for (Int32 e = 0; e < numE; ++e)
-                        {
-                            Int32 ea = vArr[e];
-                            Int32 eb = vArr[(e + 1) % numE];
-                            if ((ea == u && eb == v) || (ea == v && eb == u))
-                            {
-                                edgeSel->Select(pIdx * 4 + e);
-                                break;
-                            }
-                        }
-                    };
-                    selectPolyEdge(pA);
-                    selectPolyEdge(pB);
-                }
+                // If it is a border loop, DoExtrudeEdgeLoopDrag executes extrude (or selects on click <3px) and returns true.
+                // If it is an interior edge loop, DoExtrudeEdgeLoopDrag returns false before initiating drag.
+                if (DoExtrudeEdgeLoopDrag(doc, data, bd, win, retopo, target, m_componentLoop.edges, mx, my, KEY_MLEFT))
+                    return true;
             }
-            doc->EndUndo();
-            EventAdd();
-            StatusSetText(FormatString("QuadDraw: Selected Edge Loop (@ edges)"_s, (Int32)m_componentLoop.edges.GetCount()));
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            return true;
+            return DoMoveComponentLoopDrag(doc, data, bd, win, retopo, target, mx, my, KEY_MLEFT);
         }
-        else if (m_componentLoop.type == ComponentLoopType::Polygon && m_componentLoop.polygons.GetCount() > 0)
+        else if (m_componentLoop.type != ComponentLoopType::None)
         {
-            doc->StartUndo();
-            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
-            BaseSelect* polySel = retopo->GetWritablePolygonS();
-            if (polySel)
-            {
-                for (Int32 i = 0; i < (Int32)m_componentLoop.polygons.GetCount(); ++i)
-                {
-                    polySel->Select(m_componentLoop.polygons[i]);
-                }
-            }
-            doc->EndUndo();
-            EventAdd();
-            StatusSetText(FormatString("QuadDraw: Selected Polygon Loop (@ polygons)"_s, (Int32)m_componentLoop.polygons.GetCount()));
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            return true;
-        }
-        else if (m_componentLoop.type == ComponentLoopType::Vertex && m_componentLoop.vertices.GetCount() > 0)
-        {
-            doc->StartUndo();
-            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
-            BaseSelect* ptSel = retopo->GetWritablePointS();
-            if (ptSel)
-            {
-                for (Int32 i = 0; i < (Int32)m_componentLoop.vertices.GetCount(); ++i)
-                {
-                    ptSel->Select(m_componentLoop.vertices[i]);
-                }
-            }
-            doc->EndUndo();
-            EventAdd();
-            StatusSetText(FormatString("QuadDraw: Selected Vertex Loop (@ vertices)"_s, (Int32)m_componentLoop.vertices.GetCount()));
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            return true;
+            return DoMoveComponentLoopDrag(doc, data, bd, win, retopo, target, mx, my, KEY_MLEFT);
         }
 
         return true;

@@ -37,12 +37,15 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
      - **QuadDraw**: Standard retopology mode for placing points, creating quads, extruding border edges, and tweaking components.
      - **Knife (Cut Loops)**: Dedicated knife tool mode. Hovering over geometry previews edge loop cuts, and **LMB Drag** inserts and slides edge loops directly without needing modifier keys.
 
-7. **Component Loop Highlighting & Selection (Ctrl)**:
+7. **Component Loop Highlighting, Drag Extrusion & Moving (Ctrl)**:
    - **Ctrl + Hover**: Hovering over any component highlights its complete loop:
      - Hover over an **Edge** -> highlights the **Edge Loop**.
      - Hover over a **Polygon** -> highlights the **Polygon Loop (Face Loop)** across opposite quad edges.
      - Hover over a **Vertex** -> highlights the **Vertex Loop** passing through that vertex.
-   - **Ctrl + LMB**: Selects the highlighted component loop into Cinema 4D's native selection (`GetWritablePointS`, `GetWritableEdgeS`, or `GetWritablePolygonS`).
+   - **Ctrl + LMB (Click)**: Selects the highlighted component loop into Cinema 4D's native selection (`GetWritablePointS`, `GetWritableEdgeS`, or `GetWritablePolygonS`).
+   - **Ctrl + LMB Drag** (or **Ctrl + MMB Drag** on edge loops):
+     - **Border Edge Loop**: Extrudes the entire boundary edge loop into a continuous strip/ring of quad polygons along the reference surface, complete with snapping and auto-welding.
+     - **Interior Edge Loop / Polygon Loop / Vertex Loop**: Interactively translates/tweaks all vertices of the loop across the reference surface in real-time.
 
 8. **Interactive Component Deletion**:
    - **Ctrl + Shift + Hover**: highlights vertices, edge loops, or polygons in red.
