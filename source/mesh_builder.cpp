@@ -918,6 +918,263 @@ EdgeLoopResult MeshBuilder::FindEdgeLoop(PolygonObject* mesh, Int32 startV0, Int
     return res;
 }
 
+maxon::BaseArray<Int32> MeshBuilder::FindPolygonLoop(PolygonObject* mesh, Int32 startPoly, Int32 enterV0, Int32 enterV1)
+{
+    maxon::BaseArray<Int32> result;
+    if (!mesh || startPoly < 0 || startPoly >= mesh->GetPolygonCount())
+        return result;
+
+    Int32 polyCount = mesh->GetPolygonCount();
+    Int32 ptCount = mesh->GetPointCount();
+    if (polyCount == 0 || ptCount == 0)
+        return result;
+
+    const CPolygon* polys = mesh->GetPolygonR();
+    const CPolygon& sp = polys[startPoly];
+    if (sp.c == sp.d)
+    {
+        result.Append(startPoly) iferr_ignore("Append");
+        return result;
+    }
+
+    Neighbor neighbor;
+    if (!neighbor.Init(ptCount, polys, polyCount, nullptr))
+    {
+        result.Append(startPoly) iferr_ignore("Append");
+        return result;
+    }
+
+    Int32 sQ[4] = { sp.a, sp.b, sp.c, sp.d };
+    Int32 enterK = NOTOK;
+    for (Int32 i = 0; i < 4; ++i)
+    {
+        Int32 nextI = (i + 1) % 4;
+        if ((sQ[i] == enterV0 && sQ[nextI] == enterV1) || (sQ[i] == enterV1 && sQ[nextI] == enterV0))
+        {
+            enterK = i;
+            break;
+        }
+    }
+
+    if (enterK == NOTOK)
+    {
+        enterK = 0;
+    }
+
+    maxon::BaseArray<Int32> forwardList;
+    forwardList.Append(startPoly) iferr_ignore("Append");
+
+    auto traceDir = [&](Int32 initialEdgeU, Int32 initialEdgeV) -> maxon::BaseArray<Int32> {
+        maxon::BaseArray<Int32> chain;
+        Int32 currEdgeU = initialEdgeU;
+        Int32 currEdgeV = initialEdgeV;
+        Int32 prevPoly = startPoly;
+
+        for (Int32 step = 0; step < 1000; ++step)
+        {
+            Int32 pA = NOTOK, pB = NOTOK;
+            neighbor.GetEdgePolys(currEdgeU, currEdgeV, &pA, &pB);
+            Int32 nextPoly = (pA == prevPoly) ? pB : pA;
+
+            if (nextPoly == NOTOK || nextPoly < 0 || nextPoly >= polyCount)
+                break;
+
+            if (nextPoly == startPoly)
+                break;
+
+            Bool visited = false;
+            for (Int32 i = 0; i < (Int32)forwardList.GetCount(); ++i)
+            {
+                if (forwardList[i] == nextPoly) { visited = true; break; }
+            }
+            if (visited) break;
+            for (Int32 i = 0; i < (Int32)chain.GetCount(); ++i)
+            {
+                if (chain[i] == nextPoly) { visited = true; break; }
+            }
+            if (visited) break;
+
+            const CPolygon& np = polys[nextPoly];
+            if (np.c == np.d)
+            {
+                chain.Append(nextPoly) iferr_ignore("Append");
+                break;
+            }
+
+            Int32 nQ[4] = { np.a, np.b, np.c, np.d };
+            Int32 matchedK = NOTOK;
+            for (Int32 i = 0; i < 4; ++i)
+            {
+                Int32 nextI = (i + 1) % 4;
+                if ((nQ[i] == currEdgeU && nQ[nextI] == currEdgeV) || (nQ[i] == currEdgeV && nQ[nextI] == currEdgeU))
+                {
+                    matchedK = i;
+                    break;
+                }
+            }
+
+            if (matchedK == NOTOK)
+                break;
+
+            chain.Append(nextPoly) iferr_ignore("Append");
+
+            Int32 oppK = (matchedK + 2) % 4;
+            currEdgeU = nQ[oppK];
+            currEdgeV = nQ[(oppK + 1) % 4];
+            prevPoly = nextPoly;
+        }
+
+        return chain;
+    };
+
+    maxon::BaseArray<Int32> fwd = traceDir(sQ[enterK], sQ[(enterK + 1) % 4]);
+    for (Int32 i = 0; i < (Int32)fwd.GetCount(); ++i)
+    {
+        forwardList.Append(fwd[i]) iferr_ignore("Append");
+    }
+
+    Int32 oppStartK = (enterK + 2) % 4;
+    maxon::BaseArray<Int32> bwd = traceDir(sQ[oppStartK], sQ[(oppStartK + 1) % 4]);
+
+    for (Int32 i = (Int32)bwd.GetCount() - 1; i >= 0; --i)
+    {
+        result.Append(bwd[i]) iferr_ignore("Append");
+    }
+    for (Int32 i = 0; i < (Int32)forwardList.GetCount(); ++i)
+    {
+        result.Append(forwardList[i]) iferr_ignore("Append");
+    }
+
+    return result;
+}
+
+maxon::BaseArray<Int32> MeshBuilder::FindVertexLoop(BaseDraw* bd, PolygonObject* mesh, Int32 startV, Float screenX, Float screenY, maxon::BaseArray<LoopEdge>* outEdges)
+{
+    maxon::BaseArray<Int32> result;
+    if (!mesh || startV < 0 || startV >= mesh->GetPointCount())
+        return result;
+
+    Int32 polyCount = mesh->GetPolygonCount();
+    Int32 ptCount = mesh->GetPointCount();
+    if (polyCount == 0 || ptCount == 0)
+    {
+        result.Append(startV) iferr_ignore("Append");
+        return result;
+    }
+
+    const CPolygon* polys = mesh->GetPolygonR();
+    const Vector* pts = mesh->GetPointR();
+    Matrix mg = mesh->GetMg();
+
+    Neighbor neighbor;
+    if (!neighbor.Init(ptCount, polys, polyCount, nullptr))
+    {
+        result.Append(startV) iferr_ignore("Append");
+        return result;
+    }
+
+    Int32* dadr = nullptr;
+    Int32 dcnt = 0;
+    neighbor.GetPointPolys(startV, &dadr, &dcnt);
+
+    maxon::BaseArray<Int32> connectedNeighbors;
+    for (Int32 i = 0; i < dcnt; ++i)
+    {
+        const CPolygon& p = polys[dadr[i]];
+        Int32 pVerts[4] = { p.a, p.b, p.c, p.d };
+        Int32 numV = (p.c != p.d) ? 4 : 3;
+        for (Int32 j = 0; j < numV; ++j)
+        {
+            if (pVerts[j] == startV)
+            {
+                Int32 prevV = pVerts[(j + numV - 1) % numV];
+                Int32 nextV = pVerts[(j + 1) % numV];
+                auto addUnique = [&](Int32 v) {
+                    if (v == startV || v == NOTOK) return;
+                    for (Int32 k = 0; k < (Int32)connectedNeighbors.GetCount(); ++k)
+                        if (connectedNeighbors[k] == v) return;
+                    connectedNeighbors.Append(v) iferr_ignore("Append");
+                };
+                addUnique(prevV);
+                addUnique(nextV);
+                break;
+            }
+        }
+    }
+
+    if (connectedNeighbors.GetCount() == 0)
+    {
+        result.Append(startV) iferr_ignore("Append");
+        return result;
+    }
+
+    Int32 bestNeighbor = connectedNeighbors[0];
+    Float bestDist = 1e30;
+
+    Vector sV = bd ? bd->WS(mg * pts[startV]) : Vector(0.0);
+    Vector2d mousePt(screenX, screenY);
+
+    for (Int32 i = 0; i < (Int32)connectedNeighbors.GetCount(); ++i)
+    {
+        Int32 nb = connectedNeighbors[i];
+        Vector sNb = bd ? bd->WS(mg * pts[nb]) : Vector(0.0);
+        if (sV.z <= 0.0 || sNb.z <= 0.0) continue;
+
+        Vector2d a(sV.x, sV.y);
+        Vector2d b(sNb.x, sNb.y);
+        Vector2d ab = b - a;
+        Float abLen2 = ab.x * ab.x + ab.y * ab.y;
+        Float dist = 1e30;
+        if (abLen2 > 1e-4)
+        {
+            Float t = ((mousePt.x - a.x) * ab.x + (mousePt.y - a.y) * ab.y) / abLen2;
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+            Vector2d proj = a + ab * t;
+            Vector2d diff = mousePt - proj;
+            dist = std::sqrt(diff.x * diff.x + diff.y * diff.y);
+        }
+        else
+        {
+            Vector2d diff = mousePt - a;
+            dist = std::sqrt(diff.x * diff.x + diff.y * diff.y);
+        }
+
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            bestNeighbor = nb;
+        }
+    }
+
+    EdgeLoopResult el = FindEdgeLoop(mesh, startV, bestNeighbor);
+
+    if (outEdges)
+    {
+        outEdges->CopyFrom(el.edges) iferr_ignore("Copy edges");
+    }
+
+    for (Int32 i = 0; i < (Int32)el.edges.GetCount(); ++i)
+    {
+        Int32 v0 = el.edges[i].v0;
+        Int32 v1 = el.edges[i].v1;
+        auto addVert = [&](Int32 v) {
+            for (Int32 k = 0; k < (Int32)result.GetCount(); ++k)
+                if (result[k] == v) return;
+            result.Append(v) iferr_ignore("Append");
+        };
+        addVert(v0);
+        addVert(v1);
+    }
+
+    if (result.GetCount() == 0)
+    {
+        result.Append(startV) iferr_ignore("Append");
+    }
+
+    return result;
+}
+
 Bool MeshBuilder::DeleteEdgeLoop(PolygonObject* mesh, const maxon::BaseArray<LoopEdge>& loopEdges)
 {
     if (!mesh || loopEdges.GetCount() == 0) return false;

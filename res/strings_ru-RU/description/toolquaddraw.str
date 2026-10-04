@@ -2,6 +2,11 @@ STRINGTABLE toolquaddraw
 {
     toolquaddraw                    "QuadDraw Retopo Tool";
 
+    QUADDRAW_GROUP_TOOL             "Режим инструмента";
+    QUADDRAW_ACTIVE_TOOL            "Активный инструмент";
+    QUADDRAW_TOOL_QUAD              "QuadDraw (Ретопология)";
+    QUADDRAW_TOOL_KNIFE             "Нож (Разрез петель)";
+
     QUADDRAW_GROUP_DISPLAY          "Отображение";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Отключить кастомный шейдинг";
     QUADDRAW_DISABLE_XRAY           "Отключить X-Ray (инструменты и шейдинг)";
@@ -14,7 +19,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_GROUP_INTERACTIVE      "Интерактивные настройки";
     QUADDRAW_BORDER_EXTRUDE_LMB     "Экструд граничных рёбер (ЛКМ перетаскивание)";
     QUADDRAW_PREVIEW_COLOR          "Цвет превью квада (Shift)";
-    QUADDRAW_CUT_COLOR              "Цвет разреза петли (Ctrl)";
+    QUADDRAW_CUT_COLOR              "Цвет разреза петли (Нож)";
     QUADDRAW_HIGHLIGHT_COLOR        "Цвет подсветки при наведении";
     QUADDRAW_HOVER_LINE_WIDTH       "Толщина подсветки";
 

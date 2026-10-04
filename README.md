@@ -32,22 +32,30 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
    - Multiple relax modes: Auto-Lock (preserves borders or interiors depending on stroke origin), Border Only, Interior Only, or All.
    - **Shift + MMB Drag**: interactively adjusts relax brush radius (horizontal drag) and strength (vertical drag), identical to C4D_RelaxTool.
 
-6. **Edge Loop Insertion (Cut Tool)**:
-   - **Ctrl + Hover**: previews edge loops across quad rings.
-   - **Ctrl + LMB Drag**: inserts edge loops with interactive slide positioning.
+6. **Tool Modes (Tool Switching in Settings)**:
+   - **Active Tool** dropdown in the tool's settings allows switching between:
+     - **QuadDraw**: Standard retopology mode for placing points, creating quads, extruding border edges, and tweaking components.
+     - **Knife (Cut Loops)**: Dedicated knife tool mode. Hovering over geometry previews edge loop cuts, and **LMB Drag** inserts and slides edge loops directly without needing modifier keys.
 
-7. **Interactive Component Deletion**:
+7. **Component Loop Highlighting & Selection (Ctrl)**:
+   - **Ctrl + Hover**: Hovering over any component highlights its complete loop:
+     - Hover over an **Edge** -> highlights the **Edge Loop**.
+     - Hover over a **Polygon** -> highlights the **Polygon Loop (Face Loop)** across opposite quad edges.
+     - Hover over a **Vertex** -> highlights the **Vertex Loop** passing through that vertex.
+   - **Ctrl + LMB**: Selects the highlighted component loop into Cinema 4D's native selection (`GetWritablePointS`, `GetWritableEdgeS`, or `GetWritablePolygonS`).
+
+8. **Interactive Component Deletion**:
    - **Ctrl + Shift + Hover**: highlights vertices, edge loops, or polygons in red.
    - **Ctrl + Shift + LMB**: removes the highlighted component.
 
-8. **Tweak Mode**:
+9. **Tweak Mode**:
    - **LMB Drag** on vertices, edges, or polygons moves components directly.
    - Dragging a vertex onto another merges them automatically (Weld).
 
-9. **Display Settings**:
-   - **Disable Custom Mesh Shading** (`QUADDRAW_DISABLE_CUSTOM_SHADING`): checked by default to keep clean native Cinema 4D viewport shading on the editable mesh upon tool activation. Uncheck to display translucent retopo polygon face overlays (`Face Color` & `Face Opacity`).
-   - **Disable X-Ray (Tools & Shading)** (`QUADDRAW_DISABLE_XRAY`): checked by default to completely prevent vertices, edge cut loops, quad previews, component highlights, and custom shading from being drawn through the mesh (hardware depth testing, Cinema 4D `INVERSE_Z` pass culling, and normal backface culling). Uncheck to see tools and overlays through geometry (X-Ray mode).
-   - Configurable wireframe color, line width, vertex point size, and interactive hover colors.
+10. **Display Settings**:
+    - **Disable Custom Mesh Shading** (`QUADDRAW_DISABLE_CUSTOM_SHADING`): checked by default to keep clean native Cinema 4D viewport shading on the editable mesh upon tool activation. Uncheck to display translucent retopo polygon face overlays (`Face Color` & `Face Opacity`).
+    - **Disable X-Ray (Tools & Shading)** (`QUADDRAW_DISABLE_XRAY`): checked by default to completely prevent vertices, edge cut loops, quad previews, component highlights, and custom shading from being drawn through the mesh (hardware depth testing, Cinema 4D `INVERSE_Z` pass culling, and normal backface culling). Uncheck to see tools and overlays through geometry (X-Ray mode).
+    - Configurable wireframe color, line width, vertex point size, and interactive hover colors.
 
 ---
 
@@ -55,16 +63,16 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 
 | Shortcut | Action |
 |---|---|
-| **LMB Click** | Place a point on the surface (or in view plane if no target) |
+| **LMB Click** | Place a point on the surface (in Knife mode: insert edge loop cut) |
 | **LMB Drag on Border Edge** | Extrude border edge (when setting is enabled; creates new quad, snaps & welds on drop) |
-| **LMB Drag** | Tweak/move vertex, interior edge, or polygon (welds on vertex drop) |
+| **LMB Drag** | Tweak/move vertex, interior edge, or polygon (welds on vertex drop; in Knife mode: slides edge loop) |
 | **MMB Drag on Edge** | Extrude highlighted border edge (alternative shortcut) |
 | **Shift + Hover** | Preview prospective quad polygon |
 | **Shift + LMB** | Create quad polygon from preview |
 | **Shift + LMB Drag** | Relax topology using the relax brush |
 | **Shift + MMB Drag** | Interactively adjust relax brush radius (horizontal) and strength (vertical) |
-| **Ctrl + Hover** | Preview edge loop cut |
-| **Ctrl + LMB / Drag** | Insert edge loop and slide |
+| **Ctrl + Hover** | Highlight loop of components (Vertex Loop, Edge Loop, or Polygon Loop) |
+| **Ctrl + LMB** | Select the highlighted component loop into Cinema 4D selection |
 | **Ctrl + Shift + Hover** | Highlight vertex, edge loop, or polygon for deletion |
 | **Ctrl + Shift + LMB** | Delete highlighted element |
 | **Esc** | Cancel active preview or slide operation |

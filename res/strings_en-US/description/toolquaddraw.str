@@ -2,6 +2,11 @@ STRINGTABLE toolquaddraw
 {
     toolquaddraw                    "QuadDraw Retopo Tool";
 
+    QUADDRAW_GROUP_TOOL             "Tool Mode";
+    QUADDRAW_ACTIVE_TOOL            "Active Tool";
+    QUADDRAW_TOOL_QUAD              "QuadDraw";
+    QUADDRAW_TOOL_KNIFE             "Knife (Cut Loops)";
+
     QUADDRAW_GROUP_DISPLAY          "Display Settings";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Disable Custom Mesh Shading";
     QUADDRAW_DISABLE_XRAY           "Disable X-Ray (Tools & Shading)";
@@ -14,7 +19,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_GROUP_INTERACTIVE      "Interactive Settings";
     QUADDRAW_BORDER_EXTRUDE_LMB     "Extrude Border Edges (LMB Drag)";
     QUADDRAW_PREVIEW_COLOR          "Quad Preview Color (Shift)";
-    QUADDRAW_CUT_COLOR              "Cut Loop Color (Ctrl)";
+    QUADDRAW_CUT_COLOR              "Cut Loop Color (Knife)";
     QUADDRAW_HIGHLIGHT_COLOR        "Hover Highlight Color";
     QUADDRAW_HOVER_LINE_WIDTH       "Hover Line Width";
 

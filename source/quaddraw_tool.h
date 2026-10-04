@@ -98,6 +98,35 @@ private:
 
     DeleteHighlight m_deleteHighlight;
 
+    // Component Loop Highlight (Ctrl hover: Vertex Loop, Edge Loop, Polygon Loop)
+    enum class ComponentLoopType
+    {
+        None = 0,
+        Vertex,
+        Edge,
+        Polygon
+    };
+
+    struct ComponentLoopHighlight
+    {
+        ComponentLoopType type = ComponentLoopType::None;
+        Int32             sourceIndex = NOTOK;
+        maxon::BaseArray<Int32> vertices;
+        maxon::BaseArray<LoopEdge> edges;
+        maxon::BaseArray<Int32> polygons;
+
+        void Reset()
+        {
+            type = ComponentLoopType::None;
+            sourceIndex = NOTOK;
+            vertices.Reset();
+            edges.Reset();
+            polygons.Reset();
+        }
+    };
+
+    ComponentLoopHighlight m_componentLoop;
+
     // Normal Tweak Mode (Vertex, Edge, Polygon hover & drag)
     enum class TweakMode
     {

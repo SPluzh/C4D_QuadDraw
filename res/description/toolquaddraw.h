@@ -3,6 +3,11 @@
 
 enum
 {
+    QUADDRAW_GROUP_TOOL             = 2030,
+    QUADDRAW_ACTIVE_TOOL            = 2031,
+    QUADDRAW_TOOL_QUAD              = 0,
+    QUADDRAW_TOOL_KNIFE             = 1,
+
     QUADDRAW_GROUP_DISPLAY          = 2000,
     QUADDRAW_DISABLE_CUSTOM_SHADING = 2006,
     QUADDRAW_DISABLE_XRAY           = 2007,

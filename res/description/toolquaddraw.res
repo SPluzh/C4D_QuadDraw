@@ -5,6 +5,20 @@ CONTAINER toolquaddraw
 
     GROUP MDATA_MAINGROUP
     {
+        GROUP QUADDRAW_GROUP_TOOL
+        {
+            DEFAULT 1;
+
+            LONG QUADDRAW_ACTIVE_TOOL
+            {
+                CYCLE
+                {
+                    QUADDRAW_TOOL_QUAD;
+                    QUADDRAW_TOOL_KNIFE;
+                }
+            }
+        }
+
         GROUP QUADDRAW_GROUP_INTERACTIVE
         {
             DEFAULT 1;

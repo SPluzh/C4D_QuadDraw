@@ -142,6 +142,12 @@ public:
     // Trace an edge loop (strip of edges) starting from edge (startV0, startV1)
     EdgeLoopResult FindEdgeLoop(PolygonObject* mesh, Int32 startV0, Int32 startV1);
 
+    // Trace a polygon loop (face loop / strip of quads) starting from startPoly crossing edge (enterV0, enterV1)
+    maxon::BaseArray<Int32> FindPolygonLoop(PolygonObject* mesh, Int32 startPoly, Int32 enterV0, Int32 enterV1);
+
+    // Trace a vertex loop starting from startV in direction towards screen (screenX, screenY)
+    maxon::BaseArray<Int32> FindVertexLoop(BaseDraw* bd, PolygonObject* mesh, Int32 startV, Float screenX, Float screenY, maxon::BaseArray<LoopEdge>* outEdges = nullptr);
+
     // Delete an entire edge loop (strip of edges), cleanly dissolving quads and removing unreferenced vertices
     Bool DeleteEdgeLoop(PolygonObject* mesh, const maxon::BaseArray<LoopEdge>& loopEdges);
 

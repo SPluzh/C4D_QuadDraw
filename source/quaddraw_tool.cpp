@@ -96,6 +96,9 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
         else if (Abs(data.GetFloat(QUADDRAW_HOVER_LINE_WIDTH) - 2.8) < 0.05)
             data.SetFloat(QUADDRAW_HOVER_LINE_WIDTH, 1.4);
 
+        if (data.FindIndex(QUADDRAW_ACTIVE_TOOL) == NOTOK)
+            data.SetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
         if (data.FindIndex(QUADDRAW_RELAX_MODE) == NOTOK)
             data.SetInt32(QUADDRAW_RELAX_MODE, QUADDRAW_RELAX_MODE_AUTOLOCK);
         if (data.FindIndex(QUADDRAW_RELAX_RADIUS) == NOTOK)
@@ -114,6 +117,8 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     const Vector defaultFaceColor(0.0, 150.0 / 255.0, 1.0); // 0 150 255
     const Vector defaultWireColor(0.0, 0.0, 0.0);           // Black
     const Vector defaultHighlightColor(1.0, 1.0, 1.0);      // White
+
+    data.SetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
 
     data.SetBool(QUADDRAW_DISABLE_CUSTOM_SHADING, true);
     data.SetBool(QUADDRAW_DISABLE_XRAY, true);
@@ -147,6 +152,7 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
     m_shiftQuadPreview.valid = false;
     m_edgeCutPreview.valid = false;
     m_deleteHighlight.type = DeleteTargetType::None;
+    m_componentLoop.Reset();
     m_hoverTweak.mode = TweakMode::None;
     m_activeDragMode = TweakMode::None;
     m_dragVertexIdx = NOTOK;
@@ -583,11 +589,170 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     m_deleteHighlight.loopEdges.Reset();
 
     // =========================================================================
-    // MODE 2: CTRL HELD ALONE (CUT / INSERT EDGE LOOP MODE - Maya style)
+    // MODE 2: CTRL HELD ALONE (COMPONENT LOOP HIGHLIGHT - Vertex, Edge, Polygon Loop)
     // =========================================================================
     if (m_ctrlHeld && !m_shiftHeld)
     {
         m_shiftQuadPreview.valid = false;
+        m_edgeCutPreview.valid = false;
+        m_componentLoop.Reset();
+
+        if (retopo && retopo->GetPointCount() > 0)
+        {
+            Float polyZ = 1e30;
+            Int32 underPoly = (retopo->GetPolygonCount() > 0)
+                ? m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper, &polyZ) : NOTOK;
+
+            if (underPoly != NOTOK && underPoly < retopo->GetPolygonCount())
+            {
+                // When cursor is over a polygon:
+                const CPolygon& p = retopo->GetPolygonR()[underPoly];
+                const Vector* pts = retopo->GetPointR();
+                Matrix rMg = retopo->GetMg();
+
+                Int32 polyVerts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+                Int32 vertCount = (p.c != p.d) ? 4 : 3;
+
+                // Priority 1: Vertex of underPoly (threshold 10 px)
+                Int32 bestPolyV = NOTOK;
+                Float bestVertDist = 10.0;
+                for (Int32 vi = 0; vi < vertCount; ++vi)
+                {
+                    Int32 vIdx = polyVerts[vi];
+                    if (vIdx == NOTOK) continue;
+                    Vector sPos = bd->WS(rMg * pts[vIdx]);
+                    if (sPos.z <= 0.0) continue;
+                    Float dx = sPos.x - x, dy = sPos.y - y;
+                    Float d = std::sqrt(dx * dx + dy * dy);
+                    if (d <= bestVertDist)
+                    {
+                        bestVertDist = d;
+                        bestPolyV = vIdx;
+                    }
+                }
+
+                if (bestPolyV != NOTOK)
+                {
+                    // Vertex loop
+                    m_componentLoop.type = ComponentLoopType::Vertex;
+                    m_componentLoop.sourceIndex = bestPolyV;
+                    m_componentLoop.vertices = m_builder.FindVertexLoop(bd, retopo, bestPolyV, x, y, &m_componentLoop.edges);
+                }
+                else
+                {
+                    // Priority 2: Edge of underPoly (threshold 10 px)
+                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, x, y);
+                    if (polyEdge.valid && polyEdge.dist <= 10.0)
+                    {
+                        // Edge loop
+                        m_componentLoop.type = ComponentLoopType::Edge;
+                        m_componentLoop.sourceIndex = polyEdge.v0;
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
+                        m_componentLoop.edges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    }
+                    else
+                    {
+                        // Priority 3: underPoly face loop (Polygon loop)
+                        EdgeHit pe = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, x, y);
+                        Int32 enterV0 = pe.valid ? pe.v0 : p.a;
+                        Int32 enterV1 = pe.valid ? pe.v1 : p.b;
+
+                        m_componentLoop.type = ComponentLoopType::Polygon;
+                        m_componentLoop.sourceIndex = underPoly;
+                        m_componentLoop.polygons = m_builder.FindPolygonLoop(retopo, underPoly, enterV0, enterV1);
+                    }
+                }
+            }
+            else
+            {
+                // Cursor outside polygons (near mesh boundary)
+                Int32 nearVertex = m_snapper.FindNearestRetopoVertex(bd, retopo, x, y, 10.0, NOTOK, target);
+                if (nearVertex != NOTOK)
+                {
+                    m_componentLoop.type = ComponentLoopType::Vertex;
+                    m_componentLoop.sourceIndex = nearVertex;
+                    m_componentLoop.vertices = m_builder.FindVertexLoop(bd, retopo, nearVertex, x, y, &m_componentLoop.edges);
+                }
+                else
+                {
+                    EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 10.0, target);
+                    if (edgeHit.valid)
+                    {
+                        m_componentLoop.type = ComponentLoopType::Edge;
+                        m_componentLoop.sourceIndex = edgeHit.v0;
+                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, edgeHit.v0, edgeHit.v1);
+                        m_componentLoop.edges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                    }
+                }
+            }
+        }
+
+        bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+
+        String status;
+        if (m_componentLoop.type == ComponentLoopType::Vertex)
+            status = FormatString("QuadDraw [LOOP] | Vertex Loop (@ vertices) | Ctrl+LMB: Select Loop"_s, (Int32)m_componentLoop.vertices.GetCount());
+        else if (m_componentLoop.type == ComponentLoopType::Edge)
+            status = FormatString("QuadDraw [LOOP] | Edge Loop (@ edges) | Ctrl+LMB: Select Loop"_s, (Int32)m_componentLoop.edges.GetCount());
+        else if (m_componentLoop.type == ComponentLoopType::Polygon)
+            status = FormatString("QuadDraw [LOOP] | Polygon Loop (@ polygons) | Ctrl+LMB: Select Loop"_s, (Int32)m_componentLoop.polygons.GetCount());
+        else
+            status = "QuadDraw [LOOP] | Hover over Point, Edge, or Polygon to highlight loop (Ctrl+LMB to select)"_s;
+
+        StatusSetText(status);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    // Clear component loop highlight when not holding Ctrl
+    m_componentLoop.Reset();
+
+    // =========================================================================
+    // =========================================================================
+    // MODE 3: SHIFT HELD (QUAD CREATION PREVIEW OR MAYA RELAX BRUSH)
+    // =========================================================================
+    if (m_shiftHeld)
+    {
+        Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+        Float brushStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+
+        // Check quad creation preview only if retopo has at least 4 vertices
+        if (retopo && retopo->GetPointCount() >= 4)
+        {
+            Vector viewNormal = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
+            m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y, target, &m_snapper);
+        }
+        else
+        {
+            m_shiftQuadPreview.valid = false;
+        }
+
+        if (m_shiftQuadPreview.valid)
+        {
+            bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
+            StatusSetText(FormatString("QuadDraw | Shift+LMB: Create Quad! (Vertices: @, @, @, @) | Shift+MMB Drag: Adjust Brush (@ px, @) | Target: @"_s,
+                m_shiftQuadPreview.v[0], m_shiftQuadPreview.v[1], m_shiftQuadPreview.v[2], m_shiftQuadPreview.v[3], (Int32)(brushRadius + 0.5), brushStrength, targetName));
+        }
+        else
+        {
+            // Maya-style Relax brush (fast, responsive hover exactly like C4D_RelaxTool)
+            bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+            StatusSetText(FormatString("QuadDraw [RELAX] | Shift+LMB Drag: Relax Brush (@ px, @) | Shift+MMB Drag: Adjust Radius & Strength | Target: @"_s,
+                (Int32)(brushRadius + 0.5), brushStrength, targetName));
+        }
+
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    // =========================================================================
+    // MODE 4A: KNIFE TOOL MODE (ACTIVE TOOL == KNIFE)
+    // =========================================================================
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    if (activeTool == QUADDRAW_TOOL_KNIFE)
+    {
+        m_shiftQuadPreview.valid = false;
+        m_hoverTweak.mode = TweakMode::None;
 
         if (retopo && retopo->GetPolygonCount() > 0)
         {
@@ -595,7 +760,6 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             Float hitT = 0.5;
             Int32 hitPoly = NOTOK;
 
-            // Priority 1: Check if cursor is directly over a front-facing polygon
             Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper);
             if (nearPoly != NOTOK)
             {
@@ -610,7 +774,6 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             }
             else
             {
-                // Priority 2: Cursor near a visible boundary edge
                 EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 12.0, target);
                 if (edgeHit.valid)
                 {
@@ -662,18 +825,18 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         {
             Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
             Int32 count = (Int32)m_edgeCutPreview.quadSplits.GetCount();
-            StatusSetText(FormatString("QuadDraw [CUT] | Ctrl+LMB: Insert Edge Loop (@% across @ quads) | Drag to Slide | Esc to Cancel"_s, pct, count));
+            StatusSetText(FormatString("QuadDraw [KNIFE] | LMB: Insert Edge Loop (@% across @ quads) | Drag to Slide | Esc to Cancel"_s, pct, count));
         }
         else
         {
-            StatusSetText("QuadDraw [CUT] | Hover over Edge or Quad to Insert Edge Loop (Ctrl+LMB) | Maya-style Cut"_s);
+            StatusSetText("QuadDraw [KNIFE] | Hover over Edge or Quad to Insert Edge Loop (LMB) | Drag to Slide"_s);
         }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
 
-    // Clear cut preview when not in Ctrl mode
+    // Clear cut preview when not in Knife mode
     m_edgeCutPreview.valid = false;
     m_cachedCutV0 = NOTOK;
     m_cachedCutV1 = NOTOK;
@@ -681,45 +844,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     m_cachedCutPoly = NOTOK;
 
     // =========================================================================
-    // =========================================================================
-    // MODE 3: SHIFT HELD (QUAD CREATION PREVIEW OR MAYA RELAX BRUSH)
-    // =========================================================================
-    if (m_shiftHeld)
-    {
-        Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
-        Float brushStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
-
-        // Check quad creation preview only if retopo has at least 4 vertices
-        if (retopo && retopo->GetPointCount() >= 4)
-        {
-            Vector viewNormal = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
-            m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y, target, &m_snapper);
-        }
-        else
-        {
-            m_shiftQuadPreview.valid = false;
-        }
-
-        if (m_shiftQuadPreview.valid)
-        {
-            bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
-            StatusSetText(FormatString("QuadDraw | Shift+LMB: Create Quad! (Vertices: @, @, @, @) | Shift+MMB Drag: Adjust Brush (@ px, @) | Target: @"_s,
-                m_shiftQuadPreview.v[0], m_shiftQuadPreview.v[1], m_shiftQuadPreview.v[2], m_shiftQuadPreview.v[3], (Int32)(brushRadius + 0.5), brushStrength, targetName));
-        }
-        else
-        {
-            // Maya-style Relax brush (fast, responsive hover exactly like C4D_RelaxTool)
-            bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-            StatusSetText(FormatString("QuadDraw [RELAX] | Shift+LMB Drag: Relax Brush (@ px, @) | Shift+MMB Drag: Adjust Radius & Strength | Target: @"_s,
-                (Int32)(brushRadius + 0.5), brushStrength, targetName));
-        }
-
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-        return true;
-    }
-
-    // =========================================================================
-    // MODE 3: NORMAL (DOT PLACEMENT / TWEAK DRAG: VERTEX, EDGE, POLYGON)
+    // MODE 4B: NORMAL QUADDRAW (DOT PLACEMENT / TWEAK DRAG: VERTEX, EDGE, POLYGON)
     // =========================================================================
     m_shiftQuadPreview.valid = false;
     m_hoverTweak.mode = TweakMode::None;
@@ -1500,9 +1625,96 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // ==========================================
-    // ACTION 2: CTRL (alone) + LMB -> CUT / INSERT EDGE LOOP (Maya-style)
+    // ACTION 2: CTRL (alone) + LMB -> COMPONENT LOOP SELECTION
     // ==========================================
     if ((qualifier & QCTRL) && !(qualifier & QSHIFT))
+    {
+        if (m_componentLoop.type == ComponentLoopType::Edge && m_componentLoop.edges.GetCount() > 0)
+        {
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+            EdgeBaseSelect* edgeSel = retopo->GetWritableEdgeS();
+            if (edgeSel)
+            {
+                Neighbor neighbor;
+                neighbor.Init(retopo->GetPointCount(), retopo->GetPolygonR(), retopo->GetPolygonCount(), nullptr);
+                for (Int32 i = 0; i < (Int32)m_componentLoop.edges.GetCount(); ++i)
+                {
+                    Int32 u = m_componentLoop.edges[i].v0;
+                    Int32 v = m_componentLoop.edges[i].v1;
+                    Int32 pA = NOTOK, pB = NOTOK;
+                    neighbor.GetEdgePolys(u, v, &pA, &pB);
+                    auto selectPolyEdge = [&](Int32 pIdx) {
+                        if (pIdx == NOTOK || pIdx >= retopo->GetPolygonCount()) return;
+                        const CPolygon& poly = retopo->GetPolygonR()[pIdx];
+                        Int32 vArr[4] = { poly.a, poly.b, poly.c, poly.d };
+                        Int32 numE = (poly.c != poly.d) ? 4 : 3;
+                        for (Int32 e = 0; e < numE; ++e)
+                        {
+                            Int32 ea = vArr[e];
+                            Int32 eb = vArr[(e + 1) % numE];
+                            if ((ea == u && eb == v) || (ea == v && eb == u))
+                            {
+                                edgeSel->Select(pIdx * 4 + e);
+                                break;
+                            }
+                        }
+                    };
+                    selectPolyEdge(pA);
+                    selectPolyEdge(pB);
+                }
+            }
+            doc->EndUndo();
+            EventAdd();
+            StatusSetText(FormatString("QuadDraw: Selected Edge Loop (@ edges)"_s, (Int32)m_componentLoop.edges.GetCount()));
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+        else if (m_componentLoop.type == ComponentLoopType::Polygon && m_componentLoop.polygons.GetCount() > 0)
+        {
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+            BaseSelect* polySel = retopo->GetWritablePolygonS();
+            if (polySel)
+            {
+                for (Int32 i = 0; i < (Int32)m_componentLoop.polygons.GetCount(); ++i)
+                {
+                    polySel->Select(m_componentLoop.polygons[i]);
+                }
+            }
+            doc->EndUndo();
+            EventAdd();
+            StatusSetText(FormatString("QuadDraw: Selected Polygon Loop (@ polygons)"_s, (Int32)m_componentLoop.polygons.GetCount()));
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+        else if (m_componentLoop.type == ComponentLoopType::Vertex && m_componentLoop.vertices.GetCount() > 0)
+        {
+            doc->StartUndo();
+            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+            BaseSelect* ptSel = retopo->GetWritablePointS();
+            if (ptSel)
+            {
+                for (Int32 i = 0; i < (Int32)m_componentLoop.vertices.GetCount(); ++i)
+                {
+                    ptSel->Select(m_componentLoop.vertices[i]);
+                }
+            }
+            doc->EndUndo();
+            EventAdd();
+            StatusSetText(FormatString("QuadDraw: Selected Vertex Loop (@ vertices)"_s, (Int32)m_componentLoop.vertices.GetCount()));
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+
+        return true;
+    }
+
+    // ==========================================
+    // ACTION 2B: KNIFE TOOL MODE (ACTIVE TOOL == KNIFE) + LMB -> CUT / INSERT EDGE LOOP
+    // ==========================================
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    if (activeTool == QUADDRAW_TOOL_KNIFE && !(qualifier & QSHIFT) && !(qualifier & QCTRL))
     {
         if (!m_edgeCutPreview.valid)
         {
@@ -1563,7 +1775,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                     {
                         m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, newT, m_edgeCutPreview.primaryPoly);
                         Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
-                        StatusSetText(FormatString("QuadDraw [CUT] | Sliding Edge Loop (@%)"_s, pct));
+                        StatusSetText(FormatString("QuadDraw [KNIFE] | Sliding Edge Loop (@%)"_s, pct));
                         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                     }
                 }
@@ -1577,7 +1789,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 m_cachedCutV1 = NOTOK;
                 m_cachedCutT = -1.0;
                 m_cachedCutPoly = NOTOK;
-                StatusSetText("QuadDraw: Cut canceled."_s);
+                StatusSetText("QuadDraw [KNIFE]: Cut canceled."_s);
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
@@ -1588,7 +1800,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             Int32 quadsSplit = (Int32)m_edgeCutPreview.quadSplits.GetCount();
             if (m_builder.ApplyEdgeLoopCut(retopo, m_edgeCutPreview))
             {
-                StatusSetText(FormatString("QuadDraw: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
+                StatusSetText(FormatString("QuadDraw [KNIFE]: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
             }
             m_edgeCutPreview.valid = false;
             m_cachedCutV0 = NOTOK;
@@ -1603,7 +1815,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         }
         else
         {
-            StatusSetText("QuadDraw [CUT]: No edge or quad loop detected under cursor to cut."_s);
+            StatusSetText("QuadDraw [KNIFE]: No edge or quad loop detected under cursor to cut."_s);
             return true;
         }
     }
@@ -2733,8 +2945,8 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         bd->SetMatrix_Matrix(nullptr, Matrix());
     }
 
-    // 3. Draw prospective Edge Loop Cut line when holding Ctrl
-    if (m_ctrlHeld && !m_shiftHeld && m_edgeCutPreview.valid)
+    // 3A. Draw prospective Edge Loop Cut line when in Knife mode
+    if (m_edgeCutPreview.valid)
     {
         bd->SetTransparency(0);
         bd->SetPen(cutColor);
@@ -2750,6 +2962,112 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         {
             const CutPoint& cp = m_edgeCutPreview.cutPoints[k];
             drawPoint(cp.worldPos, cutColor, pointSize, disableXRay);
+        }
+    }
+
+    // 3B. Draw Component Loop Highlight when holding Ctrl (Vertex Loop, Edge Loop, Polygon Loop)
+    if (m_ctrlHeld && !m_shiftHeld && m_componentLoop.type != ComponentLoopType::None)
+    {
+        if (m_componentLoop.type == ComponentLoopType::Vertex)
+        {
+            // Vertex Loop: prominent points and connecting edge lines
+            bd->SetTransparency(0);
+            bd->SetPen(highlightColor);
+
+            for (Int32 k = 0; k < (Int32)m_componentLoop.edges.GetCount(); ++k)
+            {
+                const LoopEdge& le = m_componentLoop.edges[k];
+                drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth + 0.5, disableXRay, 3);
+            }
+
+            if (retopo)
+            {
+                Matrix rMg = retopo->GetMg();
+                const Vector* rPts = retopo->GetPointR();
+                for (Int32 k = 0; k < (Int32)m_componentLoop.vertices.GetCount(); ++k)
+                {
+                    Int32 vi = m_componentLoop.vertices[k];
+                    if (vi >= 0 && vi < retopo->GetPointCount())
+                    {
+                        Vector wPos = rMg * rPts[vi];
+                        drawPoint(wPos, highlightColor, pointSize + 3.0, disableXRay);
+                    }
+                }
+            }
+        }
+        else if (m_componentLoop.type == ComponentLoopType::Edge)
+        {
+            // Edge Loop: thick lines and endpoint dots
+            bd->SetTransparency(0);
+            bd->SetPen(highlightColor);
+
+            for (Int32 k = 0; k < (Int32)m_componentLoop.edges.GetCount(); ++k)
+            {
+                const LoopEdge& le = m_componentLoop.edges[k];
+                drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth + 1.2, disableXRay, 3);
+                drawPoint(le.worldPos0, highlightColor, pointSize + 1.5, disableXRay);
+                drawPoint(le.worldPos1, highlightColor, pointSize + 1.5, disableXRay);
+            }
+        }
+        else if (m_componentLoop.type == ComponentLoopType::Polygon)
+        {
+            // Polygon Loop: semi-transparent faces and highlighted outlines
+            if (retopo)
+            {
+                Matrix rMg = retopo->GetMg();
+                const Vector* rPts = retopo->GetPointR();
+                const CPolygon* rPolys = retopo->GetPolygonR();
+                Int32 rPolyCount = retopo->GetPolygonCount();
+
+                Vector polyColors[4] = { highlightColor, highlightColor, highlightColor, highlightColor };
+
+                if (disableXRay)
+                {
+                    bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
+                    bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
+                    bd->LineZOffset(0);
+                }
+                else
+                {
+                    bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+                }
+
+                // Draw filled polygons
+                bd->SetTransparency(-140);
+                for (Int32 i = 0; i < (Int32)m_componentLoop.polygons.GetCount(); ++i)
+                {
+                    Int32 pIdx = m_componentLoop.polygons[i];
+                    if (pIdx < 0 || pIdx >= rPolyCount) continue;
+                    const CPolygon& p = rPolys[pIdx];
+                    Bool isQuad = (p.c != p.d);
+                    Vector wPts[4] = { rMg * rPts[p.a], rMg * rPts[p.b], rMg * rPts[p.c], rMg * rPts[p.d] };
+                    bd->DrawPolygon(wPts, polyColors, isQuad);
+                }
+                bd->DrawArrayEnd();
+
+                // Draw boundary lines for all polygons in the loop
+                bd->SetTransparency(0);
+                bd->SetPen(highlightColor);
+                for (Int32 i = 0; i < (Int32)m_componentLoop.polygons.GetCount(); ++i)
+                {
+                    Int32 pIdx = m_componentLoop.polygons[i];
+                    if (pIdx < 0 || pIdx >= rPolyCount) continue;
+                    const CPolygon& p = rPolys[pIdx];
+                    Bool isQuad = (p.c != p.d);
+                    Vector wPts[4] = { rMg * rPts[p.a], rMg * rPts[p.b], rMg * rPts[p.c], rMg * rPts[p.d] };
+                    drawThickLine(wPts[0], wPts[1], hoverLineWidth, disableXRay, 3);
+                    drawThickLine(wPts[1], wPts[2], hoverLineWidth, disableXRay, 3);
+                    if (isQuad)
+                    {
+                        drawThickLine(wPts[2], wPts[3], hoverLineWidth, disableXRay, 3);
+                        drawThickLine(wPts[3], wPts[0], hoverLineWidth, disableXRay, 3);
+                    }
+                    else
+                    {
+                        drawThickLine(wPts[2], wPts[0], hoverLineWidth, disableXRay, 3);
+                    }
+                }
+            }
         }
     }
 
@@ -3131,6 +3449,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_edgeCutPreview.valid = false;
         m_deleteHighlight.type = DeleteTargetType::None;
         m_deleteHighlight.loopEdges.Reset();
+        m_componentLoop.Reset();
         m_hoverTweak.mode = TweakMode::None;
         m_activeDragMode = TweakMode::None;
         m_dragVertexIdx = NOTOK;
@@ -3157,7 +3476,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- LMB: Click on surface to drop points\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Preview Cut / Insert Edge Loop (Maya-style)\n- Ctrl + LMB: Insert Edge Loop / Cut edges (drag to slide, Esc to cancel)\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: QuadDraw or Knife (Cut Loops)\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }
