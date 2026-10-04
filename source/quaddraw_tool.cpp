@@ -1491,6 +1491,10 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
                 continue;
 
             isDragging = true;
+            m_activeDragMode = TweakMode::LoopExtrude;
+            m_loopWeldTargets.Resize(numUnique) iferr_ignore("Resize");
+            for (Int32 k = 0; k < numUnique; ++k) m_loopWeldTargets[k] = NOTOK;
+
             doc->StartUndo();
             doc->AddUndo(UNDOTYPE::CHANGE, retopo);
 
@@ -1538,9 +1542,11 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         Vector* ptsW = retopo->GetPointW();
         Matrix invMg = ~retopo->GetMg();
         Int32 curPtCount = retopo->GetPointCount();
+        Bool hasWeldTarget = false;
 
         for (Int32 k = 0; k < numUnique; ++k)
         {
+            m_loopWeldTargets[k] = NOTOK;
             Float currSx = sPts[k].x + totalDx;
             Float currSy = sPts[k].y + totalDy;
             Vector newPos = initPts[k];
@@ -1574,7 +1580,38 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
                 gotPos = true;
             }
 
+            // Real-time magnetic snap / sticking to nearby boundary vertices
             Int32 nv = newVerts[k];
+            if (nv != NOTOK)
+            {
+                Vector curScreen = bd->WS(newPos);
+                Int32 candWeld = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 14.0, nv, target);
+                if (candWeld != NOTOK && m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld))
+                {
+                    Bool isSelf = false;
+                    for (Int32 j = 0; j < numUnique; ++j)
+                    {
+                        if (newVerts[j] == candWeld || uniqueVerts[j] == candWeld)
+                        {
+                            isSelf = true;
+                            break;
+                        }
+                    }
+                    if (!isSelf)
+                    {
+                        Vector targetPos = retopo->GetMg() * retopo->GetPointR()[candWeld];
+                        Vector targetScreen = bd->WS(targetPos);
+                        Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
+                        if (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff)
+                        {
+                            newPos = targetPos; // Magnetize / snap!
+                            m_loopWeldTargets[k] = candWeld;
+                            hasWeldTarget = true;
+                        }
+                    }
+                }
+            }
+
             if (nv != NOTOK && ptsW && nv >= 0 && nv < curPtCount)
             {
                 ptsW[nv] = invMg * newPos;
@@ -1597,11 +1634,16 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
             }
         }
 
-        StatusSetText(FormatString("QuadDraw: Extruding Border Loop (@ quads)..."_s, (Int32)edgeInfos.GetCount()));
+        if (hasWeldTarget)
+            StatusSetText("QuadDraw: Extruding Border Loop (Release to weld into target vertices)"_s);
+        else
+            StatusSetText(FormatString("QuadDraw: Extruding Border Loop (@ quads)..."_s, (Int32)edgeInfos.GetCount()));
+
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
     }
 
     MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+    m_activeDragMode = TweakMode::None;
 
     if (!isDragging)
     {
@@ -1649,13 +1691,27 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
     if (dragResult == MOUSEDRAGRESULT::ESCAPE)
     {
         doc->DoUndo(true);
+        m_loopWeldTargets.Reset();
         StatusSetText("QuadDraw: Extrude canceled."_s);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
 
-    // Auto-weld newly created vertices on drop
-    for (Int32 k = 0; k < numUnique; ++k)
+    // Weld magnetized vertices from highest index to lowest
+    for (Int32 k = numUnique - 1; k >= 0; --k)
+    {
+        Int32 nv = newVerts[k];
+        Int32 tw = (k < (Int32)m_loopWeldTargets.GetCount()) ? m_loopWeldTargets[k] : NOTOK;
+        if (nv != NOTOK && tw != NOTOK && nv != tw && nv < retopo->GetPointCount() && tw < retopo->GetPointCount())
+        {
+            m_builder.WeldVertices(retopo, nv, tw);
+            newVerts[k] = tw;
+        }
+    }
+    m_loopWeldTargets.Reset();
+
+    // Additional auto-weld check for any newly created vertices on drop
+    for (Int32 k = numUnique - 1; k >= 0; --k)
     {
         Int32 nv = newVerts[k];
         if (nv == NOTOK || nv >= retopo->GetPointCount()) continue;
@@ -1670,7 +1726,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
             for (Int32 j = 0; j < numUnique; ++j)
                 if (newVerts[j] == targetV) { isNewVert = true; break; }
 
-            if (!isNewVert)
+            if (!isNewVert && targetV < retopo->GetPointCount())
             {
                 m_builder.WeldVertices(retopo, nv, targetV);
                 newVerts[k] = targetV;
@@ -1805,15 +1861,21 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
                 continue;
 
             isDragging = true;
+            m_activeDragMode = TweakMode::LoopMove;
+            m_loopWeldTargets.Resize(numVerts) iferr_ignore("Resize");
+            for (Int32 k = 0; k < numVerts; ++k) m_loopWeldTargets[k] = NOTOK;
+
             doc->StartUndo();
             doc->AddUndo(UNDOTYPE::CHANGE, retopo);
         }
 
         Vector* ptsW = retopo->GetPointW();
         Matrix invMg = ~retopo->GetMg();
+        Bool hasWeldTarget = false;
 
         for (Int32 k = 0; k < numVerts; ++k)
         {
+            m_loopWeldTargets[k] = NOTOK;
             Float currSx = sPts[k].x + totalDx;
             Float currSy = sPts[k].y + totalDy;
             Vector newPos = initPts[k];
@@ -1847,6 +1909,34 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
                 gotPos = true;
             }
 
+            // Real-time magnetic snap for boundary vertices
+            Int32 lv = loopVerts[k];
+            if (lv >= 0 && lv < ptCount && m_builder.IsBoundaryOrIsolatedVertex(retopo, lv))
+            {
+                Vector curScreen = bd->WS(newPos);
+                Int32 candWeld = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 14.0, lv, target);
+                if (candWeld != NOTOK && m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld))
+                {
+                    Bool isSelf = false;
+                    for (Int32 j = 0; j < numVerts; ++j)
+                    {
+                        if (loopVerts[j] == candWeld) { isSelf = true; break; }
+                    }
+                    if (!isSelf)
+                    {
+                        Vector targetPos = retopo->GetMg() * retopo->GetPointR()[candWeld];
+                        Vector targetScreen = bd->WS(targetPos);
+                        Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
+                        if (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff)
+                        {
+                            newPos = targetPos; // Magnetize / snap!
+                            m_loopWeldTargets[k] = candWeld;
+                            hasWeldTarget = true;
+                        }
+                    }
+                }
+            }
+
             if (ptsW && loopVerts[k] >= 0 && loopVerts[k] < ptCount)
             {
                 ptsW[loopVerts[k]] = invMg * newPos;
@@ -1869,11 +1959,16 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
             }
         }
 
-        StatusSetText(FormatString("QuadDraw: Moving loop (@ vertices)..."_s, numVerts));
+        if (hasWeldTarget)
+            StatusSetText("QuadDraw: Moving loop (Release to weld into target vertices)"_s);
+        else
+            StatusSetText(FormatString("QuadDraw: Moving loop (@ vertices)..."_s, numVerts));
+
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
     }
 
     MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+    m_activeDragMode = TweakMode::None;
 
     if (!isDragging)
     {
@@ -1957,10 +2052,24 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
     if (dragResult == MOUSEDRAGRESULT::ESCAPE)
     {
         doc->DoUndo(true);
+        m_loopWeldTargets.Reset();
         StatusSetText("QuadDraw: Move canceled."_s);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
+
+    // Weld magnetized vertices from highest index to lowest
+    for (Int32 k = numVerts - 1; k >= 0; --k)
+    {
+        Int32 lv = loopVerts[k];
+        Int32 tw = (k < (Int32)m_loopWeldTargets.GetCount()) ? m_loopWeldTargets[k] : NOTOK;
+        if (lv != NOTOK && tw != NOTOK && lv != tw && lv < retopo->GetPointCount() && tw < retopo->GetPointCount())
+        {
+            m_builder.WeldVertices(retopo, lv, tw);
+            loopVerts[k] = tw;
+        }
+    }
+    m_loopWeldTargets.Reset();
 
     doc->EndUndo();
     EventAdd();
@@ -3622,7 +3731,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     }
 
     // 3B. Draw Component Loop Highlight when holding Ctrl (Vertex Loop, Edge Loop, Polygon Loop)
-    if (m_ctrlHeld && !m_shiftHeld && m_componentLoop.type != ComponentLoopType::None)
+    if (m_ctrlHeld && !m_shiftHeld && m_activeDragMode == TweakMode::None && m_componentLoop.type != ComponentLoopType::None)
     {
         if (m_componentLoop.type == ComponentLoopType::Vertex)
         {
@@ -3947,6 +4056,38 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             for (Int32 k = 0; k < m_dragPolyNumPts; ++k)
                 drawPoint(wPts[k], Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay);
         }
+        else if ((m_activeDragMode == TweakMode::LoopExtrude || m_activeDragMode == TweakMode::LoopMove) &&
+                 m_componentLoop.edges.GetCount() > 0)
+        {
+            const Vector yellow(1.0, 0.9, 0.1);
+            bd->SetTransparency(0);
+            bd->SetPen(yellow);
+
+            Int32 ptCount = retopo->GetPointCount();
+            for (Int32 k = 0; k < (Int32)m_componentLoop.edges.GetCount(); ++k)
+            {
+                const LoopEdge& le = m_componentLoop.edges[k];
+                if (le.v0 >= 0 && le.v0 < ptCount && le.v1 >= 0 && le.v1 < ptCount)
+                {
+                    Vector w0 = rMg * rPts[le.v0];
+                    Vector w1 = rMg * rPts[le.v1];
+                    drawThickLine(w0, w1, hoverLineWidth + 1.2, disableXRay, 3);
+                    drawPoint(w0, yellow, pointSize + 2.0, disableXRay);
+                    drawPoint(w1, yellow, pointSize + 2.0, disableXRay);
+                }
+            }
+
+            // Draw magnetized weld targets in bright red!
+            for (Int32 k = 0; k < (Int32)m_loopWeldTargets.GetCount(); ++k)
+            {
+                Int32 wt = m_loopWeldTargets[k];
+                if (wt != NOTOK && wt >= 0 && wt < ptCount)
+                {
+                    Vector targetPos = rMg * rPts[wt];
+                    drawPoint(targetPos, Vector(1.0, 0.2, 0.2), pointSize + 3.0, disableXRay);
+                }
+            }
+        }
     }
 
     // 7. Draw all retopo vertices (dots)
@@ -4022,10 +4163,17 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
             Vector toCam = isOrtho ? orthoLook : (camPos - wPos).GetNormalized();
 
-            Bool isHighlightedOrInteracting = (m_weldTargetIdx == i) || (m_weldTargetIdx2 == i) ||
+            Bool isLoopWeldTarget = false;
+            for (Int32 w = 0; w < (Int32)m_loopWeldTargets.GetCount(); ++w)
+            {
+                if (m_loopWeldTargets[w] == i) { isLoopWeldTarget = true; break; }
+            }
+
+            Bool isHighlightedOrInteracting = (m_weldTargetIdx == i) || (m_weldTargetIdx2 == i) || isLoopWeldTarget ||
                 (m_activeDragMode == TweakMode::Vertex && m_dragVertexIdx == i) ||
                 (m_activeDragMode == TweakMode::Edge && (m_dragEdgeV0 == i || m_dragEdgeV1 == i)) ||
                 (m_activeDragMode == TweakMode::Polygon && (m_dragPolyPts[0] == i || m_dragPolyPts[1] == i || m_dragPolyPts[2] == i || (m_dragPolyNumPts == 4 && m_dragPolyPts[3] == i))) ||
+                (m_activeDragMode == TweakMode::LoopExtrude || m_activeDragMode == TweakMode::LoopMove) ||
                 (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Vertex && m_hoverTweak.index == i) ||
                 (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Edge && (m_hoverTweak.edgeV0 == i || m_hoverTweak.edgeV1 == i)) ||
                 (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Polygon && (m_hoverTweak.polyPts[0] == i || m_hoverTweak.polyPts[1] == i || m_hoverTweak.polyPts[2] == i || (m_hoverTweak.polyIsQuad && m_hoverTweak.polyPts[3] == i)));
@@ -4040,10 +4188,10 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 }
             }
 
-            if (m_weldTargetIdx == i || m_weldTargetIdx2 == i)
+            if (m_weldTargetIdx == i || m_weldTargetIdx2 == i || isLoopWeldTarget)
             {
                 // Weld target in bright red
-                drawPoint(wPos, Vector(1.0, 0.2, 0.2), pointSize + 2.0, disableXRay, toCam);
+                drawPoint(wPos, Vector(1.0, 0.2, 0.2), pointSize + 3.0, disableXRay, toCam);
             }
             else if (m_activeDragMode == TweakMode::Vertex && m_dragVertexIdx == i)
             {

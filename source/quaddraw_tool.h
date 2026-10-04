@@ -140,7 +140,9 @@ private:
         None = 0,
         Vertex,
         Edge,
-        Polygon
+        Polygon,
+        LoopExtrude,
+        LoopMove
     };
 
     struct TweakHover
@@ -166,6 +168,7 @@ private:
     Int32         m_dragPolyNumPts = 0;
     Int32         m_weldTargetIdx = NOTOK;
     Int32         m_weldTargetIdx2 = NOTOK;
+    maxon::BaseArray<Int32> m_loopWeldTargets;
 };
 
 Bool RegisterQuadDraw();
