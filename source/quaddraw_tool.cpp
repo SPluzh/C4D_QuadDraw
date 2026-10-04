@@ -162,6 +162,9 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
     m_dragPolyNumPts = 0;
     m_weldTargetIdx = NOTOK;
     m_weldTargetIdx2 = NOTOK;
+    m_multiCutPoints.Reset();
+    m_multiCutPreview.valid = false;
+    m_sliceDrag.active = false;
 }
 
 Bool QuadDrawToolData::GetDDescription(const BaseDocument* doc, const BaseContainer& data, Description* description, DESCFLAGS_DESC& flags) const
@@ -746,9 +749,206 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     }
 
     // =========================================================================
-    // MODE 4A: KNIFE TOOL MODE (ACTIVE TOOL == KNIFE)
+    // MODE 4A: MULTI-CUT TOOL MODE (ACTIVE TOOL == MULTI-CUT - Maya Multi-Cut)
     // =========================================================================
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    if (activeTool == QUADDRAW_TOOL_MULTICUT)
+    {
+        m_shiftQuadPreview.valid = false;
+        m_hoverTweak.mode = TweakMode::None;
+        m_componentLoop.Reset();
+
+        if (m_ctrlHeld && retopo && retopo->GetPolygonCount() > 0)
+        {
+            // Maya Multi-Cut + Ctrl: Edge Loop Cut Preview
+            Int32 hitV0 = NOTOK, hitV1 = NOTOK;
+            Float hitT = 0.5;
+            Int32 hitPoly = NOTOK;
+
+            Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper);
+            if (nearPoly != NOTOK)
+            {
+                EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, x, y);
+                if (polyEdge.valid)
+                {
+                    hitV0 = polyEdge.v0;
+                    hitV1 = polyEdge.v1;
+                    hitT  = polyEdge.t;
+                    hitPoly = nearPoly;
+                }
+            }
+            else
+            {
+                EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 12.0, target);
+                if (edgeHit.valid)
+                {
+                    hitV0 = edgeHit.v0;
+                    hitV1 = edgeHit.v1;
+                    hitT  = edgeHit.t;
+                    hitPoly = edgeHit.polyIndex;
+                }
+            }
+
+            if (hitV0 != NOTOK && hitV1 != NOTOK)
+            {
+                if (std::abs(hitT - 0.5) < 0.05) hitT = 0.5;
+                Bool sameEdge = (hitV0 == m_cachedCutV0 && hitV1 == m_cachedCutV1 && hitPoly == m_cachedCutPoly);
+                Bool sameT = sameEdge && (std::abs(hitT - m_cachedCutT) < 0.005);
+                if (!sameT || !m_edgeCutPreview.valid)
+                {
+                    m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, hitV0, hitV1, hitT, hitPoly);
+                    m_cachedCutV0 = hitV0;
+                    m_cachedCutV1 = hitV1;
+                    m_cachedCutT = hitT;
+                    m_cachedCutPoly = hitPoly;
+                }
+            }
+            else
+            {
+                m_edgeCutPreview.valid = false;
+            }
+
+            bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
+            if (m_edgeCutPreview.valid)
+            {
+                Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
+                StatusSetText(FormatString("QuadDraw [MULTI-CUT + Ctrl] | LMB: Insert Edge Loop (@%) | Drag to Slide | Esc to Cancel"_s, pct));
+            }
+            else
+            {
+                StatusSetText("QuadDraw [MULTI-CUT + Ctrl] | Hover over Edge/Quad to Insert Edge Loop"_s);
+            }
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+
+        m_edgeCutPreview.valid = false;
+
+        // Normal Multi-Cut Hover: Snapping to Vertex or Edge
+        m_multiCutHover.type = MultiCutSnapType::None;
+        m_multiCutHover.vertexIdx = NOTOK;
+        m_multiCutHover.edgeV0 = NOTOK;
+        m_multiCutHover.edgeV1 = NOTOK;
+        m_multiCutHover.polyIndex = NOTOK;
+
+        if (retopo && retopo->GetPointCount() > 0)
+        {
+            Matrix rMg = retopo->GetMg();
+            const Vector* pts = retopo->GetPointR();
+            Int32 ptCount = retopo->GetPointCount();
+
+            // 1. Check Vertex Snap (12px)
+            Int32 nearV = m_snapper.FindNearestRetopoVertex(bd, retopo, x, y, 12.0, NOTOK, target);
+            if (nearV != NOTOK && nearV < ptCount)
+            {
+                m_multiCutHover.type = MultiCutSnapType::Vertex;
+                m_multiCutHover.vertexIdx = nearV;
+                m_multiCutHover.worldPos = rMg * pts[nearV];
+            }
+            else
+            {
+                // 2. Check Edge Snap
+                Int32 hitV0 = NOTOK, hitV1 = NOTOK, hitPoly = NOTOK;
+                Float hitT = 0.5;
+
+                Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, x, y, target, &m_snapper);
+                if (nearPoly != NOTOK)
+                {
+                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, x, y);
+                    if (polyEdge.valid)
+                    {
+                        hitV0 = polyEdge.v0;
+                        hitV1 = polyEdge.v1;
+                        hitT  = polyEdge.t;
+                        hitPoly = nearPoly;
+                    }
+                }
+                else
+                {
+                    EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, x, y, 14.0, target);
+                    if (edgeHit.valid)
+                    {
+                        hitV0 = edgeHit.v0;
+                        hitV1 = edgeHit.v1;
+                        hitT  = edgeHit.t;
+                        hitPoly = edgeHit.polyIndex;
+                    }
+                }
+
+                if (hitV0 != NOTOK && hitV1 != NOTOK)
+                {
+                    if (m_shiftHeld)
+                    {
+                        Float steps[] = { 0.0, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0 };
+                        Float bestDist = 1e30;
+                        Float bestS = hitT;
+                        for (Float s : steps)
+                        {
+                            Float d = std::abs(hitT - s);
+                            if (d < bestDist) { bestDist = d; bestS = s; }
+                        }
+                        hitT = bestS;
+                    }
+                    else
+                    {
+                        if (std::abs(hitT - 0.5) < 0.04) hitT = 0.5;
+                    }
+
+                    Vector w0 = rMg * pts[hitV0];
+                    Vector w1 = rMg * pts[hitV1];
+                    Vector midPos = (1.0 - hitT) * w0 + hitT * w1;
+                    if (target)
+                    {
+                        Vector approxN = Cross(w1 - w0, Vector(0.0, 1.0, 0.0)).GetNormalized();
+                        if (Dot(approxN, approxN) < 0.01) approxN = Vector(0.0, 1.0, 0.0);
+                        SnapResult snap = m_snapper.ProjectPointAlongNormal(target, midPos, approxN, 50.0);
+                        if (snap.valid) midPos = snap.worldPos;
+                    }
+
+                    m_multiCutHover.type = MultiCutSnapType::Edge;
+                    m_multiCutHover.edgeV0 = hitV0;
+                    m_multiCutHover.edgeV1 = hitV1;
+                    m_multiCutHover.edgeT = hitT;
+                    m_multiCutHover.polyIndex = hitPoly;
+                    m_multiCutHover.worldPos = midPos;
+                }
+            }
+        }
+
+        // Update preview if points are placed
+        if (m_multiCutPoints.GetCount() > 0)
+        {
+            m_multiCutPreview = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, &m_multiCutHover);
+            Int32 ptCount = (Int32)m_multiCutPoints.GetCount();
+            StatusSetText(FormatString("QuadDraw [MULTI-CUT] | Point @ placed | LMB: Place Next Point | Shift: Snap 50%/25% | Enter/RMB: Commit Cut | Backspace: Undo | Esc: Cancel"_s, ptCount));
+        }
+        else
+        {
+            if (m_multiCutHover.type == MultiCutSnapType::Edge)
+            {
+                Int32 pct = (Int32)(m_multiCutHover.edgeT * 100.0 + 0.5);
+                StatusSetText(FormatString("QuadDraw [MULTI-CUT] | LMB: Start Cut on Edge (@%) | Shift: Snap 50%/25% | Drag: Slice Cut across faces"_s, pct));
+            }
+            else if (m_multiCutHover.type == MultiCutSnapType::Vertex)
+            {
+                StatusSetText("QuadDraw [MULTI-CUT] | LMB: Start Cut on Vertex | Drag: Slice Cut across faces | Shift: Snap"_s);
+            }
+            else
+            {
+                StatusSetText("QuadDraw [MULTI-CUT] | LMB: Click Edge or Vertex to start Cut | Drag: Slice Cut across faces | Ctrl: Edge Loop"_s);
+            }
+        }
+
+        bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    m_multiCutHover.type = MultiCutSnapType::None;
+
+    // =========================================================================
+    // MODE 4B: KNIFE TOOL MODE (ACTIVE TOOL == KNIFE)
+    // =========================================================================
     if (activeTool == QUADDRAW_TOOL_KNIFE)
     {
         m_shiftQuadPreview.valid = false;
@@ -844,7 +1044,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     m_cachedCutPoly = NOTOK;
 
     // =========================================================================
-    // MODE 4B: NORMAL QUADDRAW (DOT PLACEMENT / TWEAK DRAG: VERTEX, EDGE, POLYGON)
+    // MODE 4C: NORMAL QUADDRAW (DOT PLACEMENT / TWEAK DRAG: VERTEX, EDGE, POLYGON)
     // =========================================================================
     m_shiftQuadPreview.valid = false;
     m_hoverTweak.mode = TweakMode::None;
@@ -2093,6 +2293,31 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
     return true;
 }
 
+Bool QuadDrawToolData::CommitMultiCut(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, PolygonObject* retopo, PolygonObject* target)
+{
+    if (!retopo || m_multiCutPoints.GetCount() < 2) return false;
+
+    MultiCutResult cutRes = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, nullptr);
+    if (!cutRes.valid || cutRes.cuts.GetCount() == 0) return false;
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+
+    Int32 count = (Int32)cutRes.cuts.GetCount();
+    Bool success = m_builder.ApplyPolygonCuts(retopo, target, m_snapper, cutRes.cuts);
+    if (success)
+    {
+        StatusSetText(FormatString("QuadDraw [MULTI-CUT]: Cut completed (@ polygons split)."_s, count));
+    }
+
+    doc->EndUndo();
+    EventAdd();
+
+    m_multiCutPoints.Reset();
+    m_multiCutPreview.valid = false;
+    return success;
+}
+
 Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, const BaseContainer& msg)
 {
     if (!doc || !bd || !win) return false;
@@ -2102,6 +2327,33 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     Float my = msg.GetFloat(BFM_INPUT_Y);
     Int32 qualifier = msg.GetInt32(BFM_INPUT_QUALIFIER);
     Bool shiftPressed = ((qualifier & QSHIFT) != 0) || m_shiftHeld;
+
+    // Handle RMB for Multi-Cut commit
+    if (channel == BFM_INPUT_MOUSERIGHT)
+    {
+        Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+        if (activeTool == QUADDRAW_TOOL_MULTICUT)
+        {
+            PolygonObject* retopo = GetEditableMesh(doc, false);
+            PolygonObject* target = GetTargetMesh(doc, retopo);
+            if (m_multiCutPoints.GetCount() >= 2 && retopo)
+            {
+                CommitMultiCut(doc, data, bd, retopo, target);
+                m_multiCutPoints.Reset();
+                m_multiCutPreview.valid = false;
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+            else if (m_multiCutPoints.GetCount() == 1)
+            {
+                m_multiCutPoints.Reset();
+                m_multiCutPreview.valid = false;
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+        }
+        return false;
+    }
 
     // =========================================================================
     // ACTION 0: SHIFT + MMB DRAG -> RESIZE RELAX BRUSH (RADIUS & STRENGTH)
@@ -2583,6 +2835,153 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             StatusSetText("QuadDraw [KNIFE]: No edge or quad loop detected under cursor to cut."_s);
             return true;
         }
+    }
+
+    // ==========================================
+    // ACTION 2C: MULTI-CUT TOOL MODE (ACTIVE TOOL == MULTI-CUT - Maya Multi-Cut)
+    // ==========================================
+    if (activeTool == QUADDRAW_TOOL_MULTICUT)
+    {
+        if (m_ctrlHeld)
+        {
+            // Maya Multi-Cut + Ctrl: Insert Edge Loop
+            if (m_edgeCutPreview.valid)
+            {
+                BaseContainer device;
+                win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+                Float dx, dy;
+                while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+                {
+                    if (dx == 0.0 && dy == 0.0) continue;
+                    mx += dx;
+                    my += dy;
+
+                    if (m_edgeCutPreview.primaryV0 != NOTOK && m_edgeCutPreview.primaryV1 != NOTOK)
+                    {
+                        Float newT = m_builder.ComputeEdgeParam(bd, retopo, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, mx, my);
+                        if (std::abs(newT - 0.5) < 0.04) newT = 0.5;
+                        if (std::abs(newT - m_edgeCutPreview.paramT) > 0.003)
+                        {
+                            m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, newT, m_edgeCutPreview.primaryPoly);
+                            Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
+                            StatusSetText(FormatString("QuadDraw [MULTI-CUT + Ctrl] | Sliding Edge Loop (@%)"_s, pct));
+                            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                        }
+                    }
+                }
+
+                MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+                if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+                {
+                    m_edgeCutPreview.valid = false;
+                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    return true;
+                }
+
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                Int32 quadsSplit = (Int32)m_edgeCutPreview.quadSplits.GetCount();
+                if (m_builder.ApplyEdgeLoopCut(retopo, m_edgeCutPreview))
+                {
+                    StatusSetText(FormatString("QuadDraw [MULTI-CUT]: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
+                }
+                m_edgeCutPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+            return true;
+        }
+
+        // Double click: commit active cut
+        Bool isDoubleClick = msg.GetBool(BFM_INPUT_DOUBLECLICK);
+        if (isDoubleClick && m_multiCutPoints.GetCount() >= 1)
+        {
+            if (m_multiCutHover.type != MultiCutSnapType::None)
+            {
+                m_multiCutPoints.Append(m_multiCutHover) iferr_ignore("Append cut pt");
+            }
+            if (m_multiCutPoints.GetCount() >= 2)
+            {
+                CommitMultiCut(doc, data, bd, retopo, target);
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+        }
+
+        // Drag (Slice Cut) or Click (Place Point)
+        Float startX = mx, startY = my;
+        BaseContainer device;
+        win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+        Float dx, dy;
+        Bool isDrag = false;
+        while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+        {
+            if (dx == 0.0 && dy == 0.0) continue;
+            mx += dx;
+            my += dy;
+
+            Float dragDist = std::sqrt((mx - startX) * (mx - startX) + (my - startY) * (my - startY));
+            if (dragDist > 6.0 && m_multiCutPoints.GetCount() == 0)
+            {
+                isDrag = true;
+                m_sliceDrag.active = true;
+                m_sliceDrag.startX = startX;
+                m_sliceDrag.startY = startY;
+                m_sliceDrag.currX = mx;
+                m_sliceDrag.currY = my;
+
+                m_sliceDrag.result = m_builder.BuildSliceCut(bd, retopo, target, m_snapper, Vector(startX, startY, 0.0), Vector(mx, my, 0.0));
+                Int32 cutCount = (Int32)m_sliceDrag.result.cuts.GetCount();
+                StatusSetText(FormatString("QuadDraw [MULTI-CUT SLICE] | Slicing @ polygons | Release LMB to cut | Esc to cancel"_s, cutCount));
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            }
+        }
+
+        MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+        if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+        {
+            m_sliceDrag.active = false;
+            m_multiCutPoints.Reset();
+            m_multiCutPreview.valid = false;
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+
+        if (isDrag && m_sliceDrag.active)
+        {
+            if (m_sliceDrag.result.valid && m_sliceDrag.result.cuts.GetCount() > 0)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                Int32 count = (Int32)m_sliceDrag.result.cuts.GetCount();
+                if (m_builder.ApplyPolygonCuts(retopo, target, m_snapper, m_sliceDrag.result.cuts))
+                {
+                    StatusSetText(FormatString("QuadDraw [MULTI-CUT]: Sliced @ polygons."_s, count));
+                }
+                doc->EndUndo();
+                EventAdd();
+            }
+            m_sliceDrag.active = false;
+            m_sliceDrag.result.valid = false;
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+        else
+        {
+            // Click: Add point to m_multiCutPoints
+            if (m_multiCutHover.type != MultiCutSnapType::None)
+            {
+                m_multiCutPoints.Append(m_multiCutHover) iferr_ignore("Append cut pt");
+                m_multiCutPreview = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, nullptr);
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+        }
+        return true;
     }
 
     // ==========================================
@@ -3730,6 +4129,78 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         }
     }
 
+    // 3A2. Draw Multi-Cut Preview (Placed points, cut path, candidate hover, and slice drag)
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    if (activeTool == QUADDRAW_TOOL_MULTICUT)
+    {
+        // 1. Draw Slice Drag if active
+        if (m_sliceDrag.active)
+        {
+            // 2D slice line across the screen
+            bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+            bd->SetTransparency(0);
+            bd->SetPen(Vector(1.0, 1.0, 0.2));
+            Vector pA = bd->SW(Vector(m_sliceDrag.startX, m_sliceDrag.startY, 500.0));
+            Vector pB = bd->SW(Vector(m_sliceDrag.currX, m_sliceDrag.currY, 500.0));
+            bd->DrawLine(pA, pB, 0);
+
+            // Draw 3D cut segments on intersected polygons
+            bd->SetPen(cutColor);
+            for (Int32 k = 0; k < (Int32)m_sliceDrag.result.previewSegments.GetCount(); ++k)
+            {
+                const MultiCutSliceSegment& seg = m_sliceDrag.result.previewSegments[k];
+                drawThickLine(seg.p0, seg.p1, hoverLineWidth + 1.2, disableXRay, 3);
+                drawPoint(seg.p0, cutColor, pointSize + 1.5, disableXRay);
+                drawPoint(seg.p1, cutColor, pointSize + 1.5, disableXRay);
+            }
+        }
+        else
+        {
+            Int32 ptCount = (Int32)m_multiCutPoints.GetCount();
+            bd->SetTransparency(0);
+            bd->SetPen(cutColor);
+
+            // Draw placed points and connecting lines
+            for (Int32 k = 0; k < ptCount; ++k)
+            {
+                drawPoint(m_multiCutPoints[k].worldPos, cutColor, pointSize + 2.5, disableXRay);
+                if (k > 0)
+                {
+                    drawThickLine(m_multiCutPoints[k - 1].worldPos, m_multiCutPoints[k].worldPos, hoverLineWidth + 1.2, disableXRay, 3);
+                }
+            }
+
+            // Draw candidate preview segments from m_multiCutPreview
+            for (Int32 k = 0; k < (Int32)m_multiCutPreview.previewSegments.GetCount(); ++k)
+            {
+                const MultiCutSliceSegment& seg = m_multiCutPreview.previewSegments[k];
+                drawThickLine(seg.p0, seg.p1, hoverLineWidth + 1.0, disableXRay, 3);
+            }
+
+            // Draw rubberband line to hover point
+            if (ptCount > 0 && m_multiCutHover.type != MultiCutSnapType::None)
+            {
+                drawThickLine(m_multiCutPoints[ptCount - 1].worldPos, m_multiCutHover.worldPos, hoverLineWidth, disableXRay, 3);
+            }
+
+            // Draw hover point and indicator
+            if (m_multiCutHover.type == MultiCutSnapType::Vertex)
+            {
+                drawPoint(m_multiCutHover.worldPos, highlightColor, pointSize + 3.0, disableXRay);
+            }
+            else if (m_multiCutHover.type == MultiCutSnapType::Edge)
+            {
+                drawPoint(m_multiCutHover.worldPos, cutColor, pointSize + 2.0, disableXRay);
+                if (retopo && m_multiCutHover.edgeV0 != NOTOK && m_multiCutHover.edgeV1 != NOTOK)
+                {
+                    Vector w0 = retopo->GetMg() * retopo->GetPointR()[m_multiCutHover.edgeV0];
+                    Vector w1 = retopo->GetMg() * retopo->GetPointR()[m_multiCutHover.edgeV1];
+                    drawThickLine(w0, w1, hoverLineWidth * 0.8, disableXRay, 2);
+                }
+            }
+        }
+    }
+
     // 3B. Draw Component Loop Highlight when holding Ctrl (Vertex Loop, Edge Loop, Polygon Loop)
     if (m_ctrlHeld && !m_shiftHeld && m_activeDragMode == TweakMode::None && m_componentLoop.type != ComponentLoopType::None)
     {
@@ -4257,13 +4728,46 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
     m_ctrlHeld  = (qual & QCTRL)  != 0;
 
     Int32 key = msg.GetInt32(BFM_INPUT_CHANNEL);
-    if (key == KEY_ESC)
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
+    if (key == KEY_ENTER)
+    {
+        if (activeTool == QUADDRAW_TOOL_MULTICUT)
+        {
+            PolygonObject* retopo = GetEditableMesh(doc, false);
+            PolygonObject* target = GetTargetMesh(doc, retopo);
+            if (m_multiCutPoints.GetCount() >= 2 && retopo)
+            {
+                CommitMultiCut(doc, data, bd, retopo, target);
+                m_multiCutPoints.Reset();
+                m_multiCutPreview.valid = false;
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+        }
+    }
+    else if (key == KEY_BACKSPACE || key == KEY_DELETE)
+    {
+        if (activeTool == QUADDRAW_TOOL_MULTICUT && m_multiCutPoints.GetCount() > 0)
+        {
+            m_multiCutPoints.Pop();
+            PolygonObject* retopo = GetEditableMesh(doc, false);
+            PolygonObject* target = GetTargetMesh(doc, retopo);
+            m_multiCutPreview = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, nullptr);
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            return true;
+        }
+    }
+    else if (key == KEY_ESC)
     {
         m_shiftQuadPreview.valid = false;
         m_edgeCutPreview.valid = false;
         m_deleteHighlight.type = DeleteTargetType::None;
         m_deleteHighlight.loopEdges.Reset();
         m_componentLoop.Reset();
+        m_multiCutPoints.Reset();
+        m_multiCutPreview.valid = false;
+        m_sliceDrag.active = false;
         m_hoverTweak.mode = TweakMode::None;
         m_activeDragMode = TweakMode::None;
         m_dragVertexIdx = NOTOK;
@@ -4290,7 +4794,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: QuadDraw or Knife (Cut Loops)\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: QuadDraw, Knife (Cut Loops), or Multi-Cut\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }

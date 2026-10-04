@@ -36,6 +36,13 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
    - **Active Tool** dropdown in the tool's settings allows switching between:
      - **QuadDraw**: Standard retopology mode for placing points, creating quads, extruding border edges, and tweaking components.
      - **Knife (Cut Loops)**: Dedicated knife tool mode. Hovering over geometry previews edge loop cuts, and **LMB Drag** inserts and slides edge loops directly without needing modifier keys.
+     - **Multi-Cut**: Autodesk Maya-style Multi-Cut tool. Point-to-point polygon cutting and screen slice cutting:
+       - **Point-to-Point Cut**: **LMB Click** snaps cut points onto edges (slides with hover) or vertices. Chains cut points across quads and triangles.
+       - **Snapping Increments**: Holding **Shift** snaps the cut point along edges to 50% midpoint and 10%/25% intervals.
+       - **Commit Cut**: Press **Enter**, **RMB (Right Mouse Button)**, or **Double-Click** to finalize the cut and split the polygons.
+       - **Undo Point**: Press **Backspace** or **Delete** to step back and remove the last placed point.
+       - **Slice Cut**: **LMB Drag** across the mesh/screen draws a slice line that cuts through all intersected faces.
+       - **Edge Loops with Ctrl**: Holding **Ctrl** in Multi-Cut mode previews and inserts edge loops (identical to Maya Multi-Cut).
 
 7. **Component Loop Highlighting, Drag Extrusion & Moving (Ctrl)**:
    - **Ctrl + Hover**: Hovering over any component highlights its complete loop:
@@ -66,19 +73,21 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 
 | Shortcut | Action |
 |---|---|
-| **LMB Click** | Place a point on the surface (in Knife mode: insert edge loop cut) |
+| **LMB Click** | Place a point on surface (in Knife: insert edge loop; in Multi-Cut: place cut point on edge/vertex) |
 | **LMB Drag on Border Edge** | Extrude border edge (when setting is enabled; creates new quad, snaps & welds on drop) |
-| **LMB Drag** | Tweak/move vertex, interior edge, or polygon (welds on vertex drop; in Knife mode: slides edge loop) |
+| **LMB Drag** | Tweak/move component (welds on drop; in Knife: slide edge loop; in Multi-Cut: slice cut across faces) |
 | **MMB Drag on Edge** | Extrude highlighted border edge (alternative shortcut) |
-| **Shift + Hover** | Preview prospective quad polygon |
+| **Shift + Hover** | Preview prospective quad polygon (in Multi-Cut: snap cut point to 50% midpoint and 10%/25% steps) |
 | **Shift + LMB** | Create quad polygon from preview |
 | **Shift + LMB Drag** | Relax topology using the relax brush |
 | **Shift + MMB Drag** | Interactively adjust relax brush radius (horizontal) and strength (vertical) |
-| **Ctrl + Hover** | Highlight loop of components (Vertex Loop, Edge Loop, or Polygon Loop) |
-| **Ctrl + LMB** | Select the highlighted component loop into Cinema 4D selection |
+| **Enter / RMB / Double-Click** | Commit Multi-Cut cut (splits quads/triangles along cut chain) |
+| **Backspace / Delete** | Remove last placed point in Multi-Cut |
+| **Ctrl + Hover** | Highlight loop of components (in Multi-Cut: preview edge loop cut) |
+| **Ctrl + LMB** | Select component loop into selection (in Multi-Cut: insert edge loop) |
 | **Ctrl + Shift + Hover** | Highlight vertex, edge loop, or polygon for deletion |
 | **Ctrl + Shift + LMB** | Delete highlighted element |
-| **Esc** | Cancel active preview or slide operation |
+| **Esc** | Cancel active preview, slide operation, or multi-cut chain |
 
 ---
 

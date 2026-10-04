@@ -2738,6 +2738,582 @@ Bool MeshBuilder::ApplyEdgeLoopCut(PolygonObject* retopo, const EdgeCutResult& c
     return true;
 }
 
+static inline Float ClampMultiCutVal(Float val, Float minVal, Float maxVal)
+{
+    return (val < minVal) ? minVal : ((val > maxVal) ? maxVal : val);
+}
+
+static Bool SegmentIntersect2D(
+    const Vector& p0, const Vector& p1,
+    const Vector& e0, const Vector& e1,
+    Float& outTE, Float& outTP)
+{
+    Float dpx = p1.x - p0.x;
+    Float dpy = p1.y - p0.y;
+    Float dex = e1.x - e0.x;
+    Float dey = e1.y - e0.y;
+
+    Float denom = dpx * dey - dpy * dex;
+    if (std::abs(denom) < 1e-6) return false;
+
+    Float dx = e0.x - p0.x;
+    Float dy = e0.y - p0.y;
+
+    Float tP = (dx * dey - dy * dex) / denom;
+    Float tE = (dx * dpy - dy * dpx) / denom;
+
+    if (tP >= -0.005 && tP <= 1.005 && tE >= 0.0 && tE <= 1.0)
+    {
+        outTP = ClampMultiCutVal(tP, 0.0, 1.0);
+        outTE = ClampMultiCutVal(tE, 0.0, 1.0);
+        return true;
+    }
+    return false;
+}
+
+MultiCutResult MeshBuilder::BuildSliceCut(
+    BaseDraw* bd,
+    PolygonObject* retopo,
+    PolygonObject* targetMesh,
+    SurfaceSnapper& snapper,
+    const Vector& screenP0,
+    const Vector& screenP1)
+{
+    MultiCutResult res;
+    if (!bd || !retopo) return res;
+
+    Int32 polyCount = retopo->GetPolygonCount();
+    Int32 ptCount = retopo->GetPointCount();
+    if (polyCount == 0 || ptCount == 0) return res;
+
+    const Vector* pts = retopo->GetPointR();
+    const CPolygon* polys = retopo->GetPolygonR();
+    Matrix rMg = retopo->GetMg();
+
+    Vector camPos = bd->GetMg().off;
+    Bool isOrtho = (bd->GetProjection() != Pperspective);
+    Vector orthoLook = -bd->GetMg().sqmat.v3.GetNormalized();
+
+    struct HitInfo
+    {
+        Int32 edgeIdx;
+        Int32 v0;
+        Int32 v1;
+        Float tEdge;
+        Float tLine;
+        Vector worldPos;
+        Bool isVertex;
+        Int32 vertexIdx;
+    };
+
+    for (Int32 pi = 0; pi < polyCount; ++pi)
+    {
+        const CPolygon& p = polys[pi];
+        Int32 N = (p.c != p.d) ? 4 : 3;
+        Int32 v[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+
+        Vector w[4];
+        Vector s[4];
+        Bool allValid = true;
+        for (Int32 k = 0; k < N; ++k)
+        {
+            if (v[k] < 0 || v[k] >= ptCount) { allValid = false; break; }
+            w[k] = rMg * pts[v[k]];
+            s[k] = bd->WS(w[k]);
+            if (s[k].z <= 0.0) { allValid = false; break; }
+        }
+        if (!allValid) continue;
+
+        // Front-facing normal check
+        Vector fn = Cross(w[1] - w[0], w[2] - w[0]);
+        Vector polyCenter = (w[0] + w[1] + w[2]) * (1.0 / 3.0);
+        Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+        if (Dot(fn, toCam) <= 0.0) continue;
+
+        // Test edges against screen line (screenP0, screenP1)
+        maxon::BaseArray<HitInfo> hits;
+        for (Int32 k = 0; k < N; ++k)
+        {
+            Int32 kNext = (k + 1) % N;
+            Float tE = 0.5, tP = 0.5;
+            if (SegmentIntersect2D(screenP0, screenP1, s[k], s[kNext], tE, tP))
+            {
+                HitInfo hit;
+                hit.edgeIdx = k;
+                hit.v0 = v[k];
+                hit.v1 = v[kNext];
+                hit.tEdge = tE;
+                hit.tLine = tP;
+                hit.isVertex = false;
+                hit.vertexIdx = NOTOK;
+
+                if (tE <= 0.03)
+                {
+                    hit.isVertex = true;
+                    hit.vertexIdx = v[k];
+                    hit.worldPos = w[k];
+                }
+                else if (tE >= 0.97)
+                {
+                    hit.isVertex = true;
+                    hit.vertexIdx = v[kNext];
+                    hit.worldPos = w[kNext];
+                }
+                else
+                {
+                    Vector midPos = (1.0 - tE) * w[k] + tE * w[kNext];
+                    if (targetMesh)
+                    {
+                        Vector approxN = fn.GetNormalized();
+                        SnapResult snap = snapper.ProjectPointAlongNormal(targetMesh, midPos, approxN, 50.0);
+                        if (snap.valid) midPos = snap.worldPos;
+                    }
+                    hit.worldPos = midPos;
+                }
+
+                // Check duplicate hit
+                Bool dup = false;
+                for (Int32 h = 0; h < (Int32)hits.GetCount(); ++h)
+                {
+                    if (hits[h].isVertex && hit.isVertex && hits[h].vertexIdx == hit.vertexIdx)
+                    {
+                        dup = true; break;
+                    }
+                    if (!hits[h].isVertex && !hit.isVertex && hits[h].edgeIdx == hit.edgeIdx)
+                    {
+                        dup = true; break;
+                    }
+                }
+                if (!dup)
+                {
+                    hits.Append(hit) iferr_ignore("Append hit");
+                }
+            }
+        }
+
+        if (hits.GetCount() == 2)
+        {
+            PolygonCut cut;
+            cut.polyIndex = pi;
+
+            cut.end0IsVertex = hits[0].isVertex;
+            cut.end0Vertex = hits[0].vertexIdx;
+            cut.end0EdgeV0 = hits[0].v0;
+            cut.end0EdgeV1 = hits[0].v1;
+            cut.end0EdgeT = hits[0].tEdge;
+            cut.end0WorldPos = hits[0].worldPos;
+
+            cut.end1IsVertex = hits[1].isVertex;
+            cut.end1Vertex = hits[1].vertexIdx;
+            cut.end1EdgeV0 = hits[1].v0;
+            cut.end1EdgeV1 = hits[1].v1;
+            cut.end1EdgeT = hits[1].tEdge;
+            cut.end1WorldPos = hits[1].worldPos;
+
+            res.cuts.Append(cut) iferr_ignore("Append cut");
+
+            MultiCutSliceSegment seg;
+            seg.p0 = hits[0].worldPos;
+            seg.p1 = hits[1].worldPos;
+            seg.polyIndex = pi;
+            res.previewSegments.Append(seg) iferr_ignore("Append segment");
+        }
+    }
+
+    if (res.cuts.GetCount() > 0)
+        res.valid = true;
+
+    return res;
+}
+
+MultiCutResult MeshBuilder::BuildMultiCutFromPoints(
+    BaseDraw* bd,
+    PolygonObject* retopo,
+    PolygonObject* targetMesh,
+    SurfaceSnapper& snapper,
+    const maxon::BaseArray<MultiCutPoint>& points,
+    const MultiCutPoint* candidateHover)
+{
+    MultiCutResult res;
+    if (!retopo) return res;
+
+    maxon::BaseArray<MultiCutPoint> allPts;
+    allPts.CopyFrom(points) iferr_ignore("Copy points");
+    if (candidateHover && candidateHover->type != MultiCutSnapType::None)
+    {
+        allPts.Append(*candidateHover) iferr_ignore("Append candidate");
+    }
+
+    Int32 count = (Int32)allPts.GetCount();
+    if (count < 2) return res;
+
+    Int32 polyCount = retopo->GetPolygonCount();
+    const CPolygon* polys = retopo->GetPolygonR();
+
+    auto polygonContainsPoint = [&](Int32 polyIdx, const MultiCutPoint& pt) -> Bool
+    {
+        if (polyIdx < 0 || polyIdx >= polyCount) return false;
+        const CPolygon& p = polys[polyIdx];
+        if (pt.type == MultiCutSnapType::Vertex)
+        {
+            return (p.a == pt.vertexIdx || p.b == pt.vertexIdx || p.c == pt.vertexIdx || (p.c != p.d && p.d == pt.vertexIdx));
+        }
+        else if (pt.type == MultiCutSnapType::Edge)
+        {
+            Int32 N = (p.c != p.d) ? 4 : 3;
+            Int32 v[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+            for (Int32 k = 0; k < N; ++k)
+            {
+                Int32 u = v[k], w = v[(k + 1) % N];
+                if ((u == pt.edgeV0 && w == pt.edgeV1) || (u == pt.edgeV1 && w == pt.edgeV0))
+                    return true;
+            }
+        }
+        else if (pt.type == MultiCutSnapType::Face)
+        {
+            return pt.polyIndex == polyIdx;
+        }
+        return false;
+    };
+
+    for (Int32 i = 0; i < count - 1; ++i)
+    {
+        const MultiCutPoint& ptA = allPts[i];
+        const MultiCutPoint& ptB = allPts[i + 1];
+
+        // 1. Check if both points share a common polygon
+        Int32 sharedPoly = NOTOK;
+        if (ptA.polyIndex != NOTOK && polygonContainsPoint(ptA.polyIndex, ptB))
+        {
+            sharedPoly = ptA.polyIndex;
+        }
+        else if (ptB.polyIndex != NOTOK && polygonContainsPoint(ptB.polyIndex, ptA))
+        {
+            sharedPoly = ptB.polyIndex;
+        }
+        else
+        {
+            // Search all polygons
+            for (Int32 pi = 0; pi < polyCount; ++pi)
+            {
+                if (polygonContainsPoint(pi, ptA) && polygonContainsPoint(pi, ptB))
+                {
+                    sharedPoly = pi;
+                    break;
+                }
+            }
+        }
+
+        if (sharedPoly != NOTOK)
+        {
+            PolygonCut cut;
+            cut.polyIndex = sharedPoly;
+
+            cut.end0IsVertex = (ptA.type == MultiCutSnapType::Vertex);
+            cut.end0Vertex = ptA.vertexIdx;
+            cut.end0EdgeV0 = ptA.edgeV0;
+            cut.end0EdgeV1 = ptA.edgeV1;
+            cut.end0EdgeT = ptA.edgeT;
+            cut.end0WorldPos = ptA.worldPos;
+
+            cut.end1IsVertex = (ptB.type == MultiCutSnapType::Vertex);
+            cut.end1Vertex = ptB.vertexIdx;
+            cut.end1EdgeV0 = ptB.edgeV0;
+            cut.end1EdgeV1 = ptB.edgeV1;
+            cut.end1EdgeT = ptB.edgeT;
+            cut.end1WorldPos = ptB.worldPos;
+
+            res.cuts.Append(cut) iferr_ignore("Append cut");
+
+            MultiCutSliceSegment seg;
+            seg.p0 = ptA.worldPos;
+            seg.p1 = ptB.worldPos;
+            seg.polyIndex = sharedPoly;
+            res.previewSegments.Append(seg) iferr_ignore("Append segment");
+        }
+        else if (bd)
+        {
+            // Intermediate traversal via screen-space slice
+            Vector sA = bd->WS(ptA.worldPos);
+            Vector sB = bd->WS(ptB.worldPos);
+            MultiCutResult slice = BuildSliceCut(bd, retopo, targetMesh, snapper, sA, sB);
+            for (Int32 sc = 0; sc < (Int32)slice.cuts.GetCount(); ++sc)
+            {
+                res.cuts.Append(slice.cuts[sc]) iferr_ignore("Append slice cut");
+            }
+            for (Int32 ss = 0; ss < (Int32)slice.previewSegments.GetCount(); ++ss)
+            {
+                res.previewSegments.Append(slice.previewSegments[ss]) iferr_ignore("Append preview seg");
+            }
+        }
+    }
+
+    if (res.cuts.GetCount() > 0)
+        res.valid = true;
+
+    return res;
+}
+
+Bool MeshBuilder::ApplyPolygonCuts(
+    PolygonObject* retopo,
+    PolygonObject* targetMesh,
+    SurfaceSnapper& snapper,
+    const maxon::BaseArray<PolygonCut>& cuts)
+{
+    if (!retopo || cuts.GetCount() == 0) return false;
+
+    Int32 oldPtCount = retopo->GetPointCount();
+    Int32 oldPolyCount = retopo->GetPolygonCount();
+    if (oldPtCount == 0 || oldPolyCount == 0) return false;
+
+    const Vector* oldPts = retopo->GetPointR();
+    const CPolygon* oldPolys = retopo->GetPolygonR();
+    Matrix mg = retopo->GetMg();
+    Matrix invMg = ~mg;
+
+    struct UniqueEdgePoint
+    {
+        Int32 u;
+        Int32 v;
+        Float t;
+        Vector worldPos;
+        Int32 newVertexIdx = NOTOK;
+    };
+    maxon::BaseArray<UniqueEdgePoint> uniquePoints;
+
+    auto getOrCreateEdgeVertex = [&](Int32 u, Int32 v, Float t, const Vector& wPos) -> Int32
+    {
+        Int32 minV = Min(u, v);
+        Int32 maxV = Max(u, v);
+        Float canonT = (u < v) ? t : (1.0 - t);
+
+        for (Int32 i = 0; i < (Int32)uniquePoints.GetCount(); ++i)
+        {
+            UniqueEdgePoint& uep = uniquePoints[i];
+            if (uep.u == minV && uep.v == maxV)
+            {
+                if (std::abs(uep.t - canonT) < 0.05)
+                    return uep.newVertexIdx;
+            }
+        }
+
+        UniqueEdgePoint uep;
+        uep.u = minV;
+        uep.v = maxV;
+        uep.t = canonT;
+        uep.worldPos = wPos;
+        uep.newVertexIdx = oldPtCount + (Int32)uniquePoints.GetCount();
+        uniquePoints.Append(uep) iferr_ignore("Append unique point");
+        return uep.newVertexIdx;
+    };
+
+    // Pre-allocate vertices for each cut endpoint on an edge
+    for (Int32 i = 0; i < (Int32)cuts.GetCount(); ++i)
+    {
+        const PolygonCut& c = cuts[i];
+        if (!c.end0IsVertex && c.end0EdgeV0 != NOTOK && c.end0EdgeV1 != NOTOK)
+        {
+            getOrCreateEdgeVertex(c.end0EdgeV0, c.end0EdgeV1, c.end0EdgeT, c.end0WorldPos);
+        }
+        if (!c.end1IsVertex && c.end1EdgeV0 != NOTOK && c.end1EdgeV1 != NOTOK)
+        {
+            getOrCreateEdgeVertex(c.end1EdgeV0, c.end1EdgeV1, c.end1EdgeT, c.end1WorldPos);
+        }
+    }
+
+    maxon::BaseArray<Bool> isCut;
+    isCut.Resize(oldPolyCount) iferr_ignore("Resize isCut");
+    for (Int32 i = 0; i < oldPolyCount; ++i) isCut[i] = false;
+
+    maxon::BaseArray<CPolygon> allNewPolys;
+
+    auto addPolysFromLoop = [&](const maxon::BaseArray<Int32>& loop)
+    {
+        Int32 cnt = (Int32)loop.GetCount();
+        if (cnt == 3)
+        {
+            allNewPolys.Append(CPolygon(loop[0], loop[1], loop[2], loop[2])) iferr_ignore("Append tri");
+        }
+        else if (cnt == 4)
+        {
+            allNewPolys.Append(CPolygon(loop[0], loop[1], loop[2], loop[3])) iferr_ignore("Append quad");
+        }
+        else if (cnt == 5)
+        {
+            // Split pentagon into Quad + Triangle
+            allNewPolys.Append(CPolygon(loop[0], loop[1], loop[2], loop[4])) iferr_ignore("Append quad");
+            allNewPolys.Append(CPolygon(loop[4], loop[2], loop[3], loop[3])) iferr_ignore("Append tri");
+        }
+        else if (cnt > 5)
+        {
+            // Fan triangulation
+            for (Int32 j = 1; j < cnt - 1; ++j)
+            {
+                allNewPolys.Append(CPolygon(loop[0], loop[j], loop[j + 1], loop[j + 1])) iferr_ignore("Append tri");
+            }
+        }
+    };
+
+    for (Int32 i = 0; i < (Int32)cuts.GetCount(); ++i)
+    {
+        const PolygonCut& c = cuts[i];
+        Int32 pi = c.polyIndex;
+        if (pi < 0 || pi >= oldPolyCount) continue;
+        if (isCut[pi]) continue;
+
+        const CPolygon& p = oldPolys[pi];
+        Int32 N = (p.c != p.d) ? 4 : 3;
+        Int32 verts[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+
+        Int32 v0 = NOTOK;
+        if (c.end0IsVertex)
+            v0 = c.end0Vertex;
+        else
+            v0 = getOrCreateEdgeVertex(c.end0EdgeV0, c.end0EdgeV1, c.end0EdgeT, c.end0WorldPos);
+
+        Int32 v1 = NOTOK;
+        if (c.end1IsVertex)
+            v1 = c.end1Vertex;
+        else
+            v1 = getOrCreateEdgeVertex(c.end1EdgeV0, c.end1EdgeV1, c.end1EdgeT, c.end1WorldPos);
+
+        if (v0 == NOTOK || v1 == NOTOK || v0 == v1) continue;
+
+        // Find perimeter coordinates s0 and s1 along polygon perimeter
+        Float s0 = -1.0;
+        if (c.end0IsVertex)
+        {
+            for (Int32 k = 0; k < N; ++k)
+            {
+                if (verts[k] == v0) { s0 = Float(k); break; }
+            }
+        }
+        else
+        {
+            for (Int32 k = 0; k < N; ++k)
+            {
+                Int32 u = verts[k], w = verts[(k + 1) % N];
+                if (u == c.end0EdgeV0 && w == c.end0EdgeV1)
+                {
+                    s0 = Float(k) + ClampMultiCutVal(c.end0EdgeT, 0.02, 0.98);
+                    break;
+                }
+                else if (u == c.end0EdgeV1 && w == c.end0EdgeV0)
+                {
+                    s0 = Float(k) + ClampMultiCutVal(1.0 - c.end0EdgeT, 0.02, 0.98);
+                    break;
+                }
+            }
+        }
+
+        Float s1 = -1.0;
+        if (c.end1IsVertex)
+        {
+            for (Int32 k = 0; k < N; ++k)
+            {
+                if (verts[k] == v1) { s1 = Float(k); break; }
+            }
+        }
+        else
+        {
+            for (Int32 k = 0; k < N; ++k)
+            {
+                Int32 u = verts[k], w = verts[(k + 1) % N];
+                if (u == c.end1EdgeV0 && w == c.end1EdgeV1)
+                {
+                    s1 = Float(k) + ClampMultiCutVal(c.end1EdgeT, 0.02, 0.98);
+                    break;
+                }
+                else if (u == c.end1EdgeV1 && w == c.end1EdgeV0)
+                {
+                    s1 = Float(k) + ClampMultiCutVal(1.0 - c.end1EdgeT, 0.02, 0.98);
+                    break;
+                }
+            }
+        }
+
+        if (s0 < 0.0 || s1 < 0.0) continue;
+
+        // Ensure s0 < s1
+        if (s1 < s0)
+        {
+            std::swap(s0, s1);
+            std::swap(v0, v1);
+        }
+
+        maxon::BaseArray<Int32> loop1;
+        loop1.Append(v0) iferr_ignore("Append loop1");
+        for (Int32 k = 0; k < N; ++k)
+        {
+            Float fK = Float(k);
+            if (fK > s0 + 0.001 && fK < s1 - 0.001)
+                loop1.Append(verts[k]) iferr_ignore("Append loop1");
+        }
+        loop1.Append(v1) iferr_ignore("Append loop1");
+
+        maxon::BaseArray<Int32> loop2;
+        loop2.Append(v1) iferr_ignore("Append loop2");
+        for (Int32 k = 0; k < N; ++k)
+        {
+            Float fK = Float(k);
+            if (fK > s1 + 0.001)
+                loop2.Append(verts[k]) iferr_ignore("Append loop2");
+        }
+        for (Int32 k = 0; k < N; ++k)
+        {
+            Float fK = Float(k);
+            if (fK < s0 - 0.001)
+                loop2.Append(verts[k]) iferr_ignore("Append loop2");
+        }
+        loop2.Append(v0) iferr_ignore("Append loop2");
+
+        if (loop1.GetCount() >= 3 && loop2.GetCount() >= 3)
+        {
+            isCut[pi] = true;
+            addPolysFromLoop(loop1);
+            addPolysFromLoop(loop2);
+        }
+    }
+
+    // Build final list of polygons
+    maxon::BaseArray<CPolygon> finalPolys;
+    for (Int32 i = 0; i < oldPolyCount; ++i)
+    {
+        if (!isCut[i])
+            finalPolys.Append(oldPolys[i]) iferr_ignore("Append poly");
+    }
+    for (Int32 i = 0; i < (Int32)allNewPolys.GetCount(); ++i)
+    {
+        finalPolys.Append(allNewPolys[i]) iferr_ignore("Append new poly");
+    }
+
+    // Build final list of points
+    Int32 newPtCount = oldPtCount + (Int32)uniquePoints.GetCount();
+    maxon::BaseArray<Vector> finalPoints;
+    finalPoints.Resize(newPtCount) iferr_ignore("Resize finalPoints");
+    for (Int32 i = 0; i < oldPtCount; ++i)
+        finalPoints[i] = oldPts[i];
+    for (Int32 i = 0; i < (Int32)uniquePoints.GetCount(); ++i)
+    {
+        Int32 idx = uniquePoints[i].newVertexIdx;
+        finalPoints[idx] = invMg * uniquePoints[i].worldPos;
+    }
+
+    if (!retopo->ResizeObject(newPtCount, (Int32)finalPolys.GetCount()))
+        return false;
+
+    Vector* ptsW = retopo->GetPointW();
+    for (Int32 i = 0; i < newPtCount; ++i)
+        ptsW[i] = finalPoints[i];
+
+    CPolygon* polysW = retopo->GetPolygonW();
+    for (Int32 i = 0; i < (Int32)finalPolys.GetCount(); ++i)
+        polysW[i] = finalPolys[i];
+
+    NotifyMeshUpdated(retopo);
+    return true;
+}
+
 static Float DistToSegment2D(Float px, Float py, Float ax, Float ay, Float bx, Float by)
 {
     Float abx = bx - ax;

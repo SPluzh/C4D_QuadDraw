@@ -169,6 +169,24 @@ private:
     Int32         m_weldTargetIdx = NOTOK;
     Int32         m_weldTargetIdx2 = NOTOK;
     maxon::BaseArray<Int32> m_loopWeldTargets;
+
+    // Multi-Cut state (Maya Multi-Cut Tool)
+    MultiCutPoint                  m_multiCutHover;
+    maxon::BaseArray<MultiCutPoint> m_multiCutPoints;
+    MultiCutResult                 m_multiCutPreview;
+
+    struct SliceDrag
+    {
+        Bool   active = false;
+        Float  startX = 0.0;
+        Float  startY = 0.0;
+        Float  currX = 0.0;
+        Float  currY = 0.0;
+        MultiCutResult result;
+    };
+    SliceDrag m_sliceDrag;
+
+    Bool CommitMultiCut(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, PolygonObject* retopo, PolygonObject* target);
 };
 
 Bool RegisterQuadDraw();

@@ -15,6 +15,7 @@ CONTAINER toolquaddraw
                 {
                     QUADDRAW_TOOL_QUAD;
                     QUADDRAW_TOOL_KNIFE;
+                    QUADDRAW_TOOL_MULTICUT;
                 }
             }
         }

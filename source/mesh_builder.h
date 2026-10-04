@@ -101,6 +101,61 @@ struct EdgeCutResult
     Bool                         isClosed = false;
 };
 
+// Multi-Cut: point snap type (Maya Multi-Cut Tool)
+enum class MultiCutSnapType
+{
+    None = 0,
+    Vertex,
+    Edge,
+    Face
+};
+
+struct MultiCutPoint
+{
+    MultiCutSnapType type = MultiCutSnapType::None;
+    Int32            vertexIdx = NOTOK;      // If Vertex snap
+    Int32            edgeV0 = NOTOK;         // If Edge snap
+    Int32            edgeV1 = NOTOK;
+    Float            edgeT = 0.5;            // Parameter t along edge (0..1)
+    Int32            polyIndex = NOTOK;      // Polygon index under cursor
+    Vector           worldPos = Vector(0.0); // 3D position (projected on target if available)
+};
+
+struct PolygonCut
+{
+    Int32  polyIndex = NOTOK;
+
+    // Endpoint 0
+    Bool   end0IsVertex = false;
+    Int32  end0Vertex = NOTOK;
+    Int32  end0EdgeV0 = NOTOK;
+    Int32  end0EdgeV1 = NOTOK;
+    Float  end0EdgeT = 0.5;
+    Vector end0WorldPos = Vector(0.0);
+
+    // Endpoint 1
+    Bool   end1IsVertex = false;
+    Int32  end1Vertex = NOTOK;
+    Int32  end1EdgeV0 = NOTOK;
+    Int32  end1EdgeV1 = NOTOK;
+    Float  end1EdgeT = 0.5;
+    Vector end1WorldPos = Vector(0.0);
+};
+
+struct MultiCutSliceSegment
+{
+    Vector p0 = Vector(0.0);
+    Vector p1 = Vector(0.0);
+    Int32  polyIndex = NOTOK;
+};
+
+struct MultiCutResult
+{
+    Bool                                   valid = false;
+    maxon::BaseArray<PolygonCut>           cuts;
+    maxon::BaseArray<MultiCutSliceSegment> previewSegments;
+};
+
 struct ExtrudeEdgeResult
 {
     Bool  valid = false;
@@ -171,6 +226,15 @@ public:
 
     // Apply the edge loop cut to the retopo mesh, splitting quads and inserting new vertices
     Bool ApplyEdgeLoopCut(PolygonObject* retopo, const EdgeCutResult& cutResult);
+
+    // Multi-Cut: Trace multi-cut across polygons given a sequence of placed points (Maya Multi-Cut Tool)
+    MultiCutResult BuildMultiCutFromPoints(BaseDraw* bd, PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const maxon::BaseArray<MultiCutPoint>& points, const MultiCutPoint* candidateHover = nullptr);
+
+    // Multi-Cut: Trace screen-space slice cut across retopo polygons from screenP0 to screenP1
+    MultiCutResult BuildSliceCut(BaseDraw* bd, PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const Vector& screenP0, const Vector& screenP1);
+
+    // Multi-Cut: Apply polygon cuts to retopo mesh, splitting quads and triangles cleanly
+    Bool ApplyPolygonCuts(PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const maxon::BaseArray<PolygonCut>& cuts);
 
     // Extrude a border edge (v0, v1), creating a new quad with new vertices at pos0 and pos1
     ExtrudeEdgeResult ExtrudeEdge(PolygonObject* mesh, Int32 v0, Int32 v1, const Vector& pos0, const Vector& pos1, const Vector& targetNormal);

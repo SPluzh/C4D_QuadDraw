@@ -6,6 +6,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_ACTIVE_TOOL            "Active Tool";
     QUADDRAW_TOOL_QUAD              "QuadDraw";
     QUADDRAW_TOOL_KNIFE             "Knife (Cut Loops)";
+    QUADDRAW_TOOL_MULTICUT          "Multi-Cut";
 
     QUADDRAW_GROUP_DISPLAY          "Display Settings";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Disable Custom Mesh Shading";
