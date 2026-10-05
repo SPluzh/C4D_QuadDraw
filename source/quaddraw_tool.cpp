@@ -1793,12 +1793,56 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
     lastPts.Resize(numUnique) iferr_ignore("Resize");
     lastNorms.Resize(numUnique) iferr_ignore("Resize");
 
+    maxon::BaseArray<Vector> initNorms;
+    initNorms.Resize(numUnique) iferr_ignore("Resize");
+
     for (Int32 k = 0; k < numUnique; ++k)
     {
         initPts[k] = rMg * pts[uniqueVerts[k]];
         sPts[k] = bd->WS(initPts[k]);
         lastPts[k] = initPts[k];
-        lastNorms[k] = Vector(0.0, 1.0, 0.0);
+
+        Int32 vIdx = uniqueVerts[k];
+        Vector vNorm(0.0);
+        for (Int32 p = 0; p < polyCount; ++p)
+        {
+            const CPolygon& poly = oldPolys[p];
+            if (poly.a == vIdx || poly.b == vIdx || poly.c == vIdx || (poly.c != poly.d && poly.d == vIdx))
+            {
+                Vector pA = rMg * pts[poly.a];
+                Vector pB = rMg * pts[poly.b];
+                Vector pC = rMg * pts[poly.c];
+                Vector fn = Cross(pB - pA, pC - pA);
+                if (fn.GetSquaredLength() > 1e-6)
+                    vNorm += fn.GetNormalized();
+            }
+        }
+        if (vNorm.GetSquaredLength() > 1e-6)
+            initNorms[k] = vNorm.GetNormalized();
+        else
+            initNorms[k] = Vector(0.0, 1.0, 0.0);
+
+        if (target)
+        {
+            SnapResult tSnap = m_snapper.ProjectPointAlongNormal(target, initPts[k], initNorms[k], 100.0);
+            if (tSnap.valid)
+                initNorms[k] = tSnap.normal;
+        }
+        lastNorms[k] = initNorms[k];
+    }
+
+    Int32 pivotIdx = 0;
+    Float minPivotDistSq = 1e30;
+    for (Int32 k = 0; k < numUnique; ++k)
+    {
+        Float px = sPts[k].x - mx;
+        Float py = sPts[k].y - my;
+        Float dSq = px * px + py * py;
+        if (dSq < minPivotDistSq)
+        {
+            minPivotDistSq = dSq;
+            pivotIdx = k;
+        }
     }
 
     BaseContainer device;
@@ -1885,40 +1929,61 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         Int32 curPtCount = retopo->GetPointCount();
         Bool hasWeldTarget = false;
 
+        // Compute 3D translation vector for the entire loop based on the active pivot
+        Float currPivotSx = sPts[pivotIdx].x + totalDx;
+        Float currPivotSy = sPts[pivotIdx].y + totalDy;
+
+        Vector delta3D(0.0);
+        Bool hasPivotHit = false;
+        Vector pivotHitPos(0.0);
+
+        if (target)
+        {
+            SnapResult pivotHit = m_snapper.RaycastSurface(bd, target, currPivotSx, currPivotSy);
+            if (pivotHit.valid)
+            {
+                pivotHitPos = pivotHit.worldPos;
+                hasPivotHit = true;
+                delta3D = pivotHitPos - initPts[pivotIdx];
+            }
+        }
+
+        if (!hasPivotHit && bd)
+        {
+            Vector candPivot = bd->SW_Reference(currPivotSx, currPivotSy, initPts[pivotIdx]);
+            delta3D = candPivot - initPts[pivotIdx];
+        }
+
+        for (Int32 k = 0; k < numUnique; ++k)
+            m_loopWeldTargets[k] = NOTOK;
+
         for (Int32 k = 0; k < numUnique; ++k)
         {
-            m_loopWeldTargets[k] = NOTOK;
-            Float currSx = sPts[k].x + totalDx;
-            Float currSy = sPts[k].y + totalDy;
-            Vector newPos = initPts[k];
-            Bool gotPos = false;
+            Vector candidatePos = initPts[k] + delta3D;
+            Vector newPos = candidatePos;
 
-            if (target)
+            if (k == pivotIdx && hasPivotHit)
             {
-                SnapResult h = m_snapper.RaycastSurface(bd, target, currSx, currSy);
-                if (h.valid)
+                newPos = pivotHitPos;
+            }
+            else if (target)
+            {
+                // Local projection along normal: preserves 3D pipe/cylindrical shape, prevents jumping across volume
+                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 200.0);
+                if (snap.valid)
                 {
-                    newPos = h.worldPos;
-                    lastPts[k] = newPos;
-                    lastNorms[k] = h.normal;
-                    gotPos = true;
+                    newPos = snap.worldPos;
+                    lastNorms[k] = snap.normal;
                 }
                 else
                 {
-                    Vector cand = bd->SW_Reference(currSx, currSy, lastPts[k]);
-                    SnapResult pr = m_snapper.ProjectPointAlongNormal(target, cand, lastNorms[k], 500.0);
-                    if (pr.valid)
+                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 500.0);
+                    if (snap2.valid)
                     {
-                        newPos = pr.worldPos;
-                        gotPos = true;
+                        newPos = snap2.worldPos;
+                        lastNorms[k] = snap2.normal;
                     }
                 }
-            }
-
-            if (!gotPos && bd)
-            {
-                newPos = bd->SW_Reference(currSx, currSy, initPts[k]);
-                gotPos = true;
             }
 
             // Real-time magnetic snap / sticking to nearby boundary vertices
@@ -1926,28 +1991,48 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
             if (nv != NOTOK)
             {
                 Vector curScreen = bd->WS(newPos);
-                Int32 candWeld = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 14.0, nv, target);
-                if (candWeld != NOTOK && m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld))
+                if (curScreen.z > 0.0)
                 {
-                    Bool isSelf = false;
-                    for (Int32 j = 0; j < numUnique; ++j)
+                    Int32 candWeld = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 14.0, nv, target);
+                    if (candWeld != NOTOK && m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld))
                     {
-                        if (newVerts[j] == candWeld || uniqueVerts[j] == candWeld)
+                        // 1. Must NOT be one of the newly created vertices or source extruded vertices
+                        Bool isNewOrSource = false;
+                        for (Int32 j = 0; j < numUnique; ++j)
                         {
-                            isSelf = true;
-                            break;
+                            if (newVerts[j] == candWeld || uniqueVerts[j] == candWeld)
+                            {
+                                isNewOrSource = true;
+                                break;
+                            }
                         }
-                    }
-                    if (!isSelf)
-                    {
-                        Vector targetPos = retopo->GetMg() * retopo->GetPointR()[candWeld];
-                        Vector targetScreen = bd->WS(targetPos);
-                        Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
-                        if (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff)
+
+                        // 2. Must NOT already be claimed by another vertex in m_loopWeldTargets (1-to-1 matching only!)
+                        Bool alreadyClaimed = false;
+                        if (!isNewOrSource)
                         {
-                            newPos = targetPos; // Magnetize / snap!
-                            m_loopWeldTargets[k] = candWeld;
-                            hasWeldTarget = true;
+                            for (Int32 j = 0; j < numUnique; ++j)
+                            {
+                                if (m_loopWeldTargets[j] == candWeld)
+                                {
+                                    alreadyClaimed = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!isNewOrSource && !alreadyClaimed)
+                        {
+                            Vector targetPos = retopo->GetMg() * retopo->GetPointR()[candWeld];
+                            Vector targetScreen = bd->WS(targetPos);
+                            Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
+                            Float worldDist = (targetPos - newPos).GetLength();
+                            if (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff && worldDist < 50.0)
+                            {
+                                newPos = targetPos; // Magnetize / snap!
+                                m_loopWeldTargets[k] = candWeld;
+                                hasWeldTarget = true;
+                            }
                         }
                     }
                 }
@@ -2038,7 +2123,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         return true;
     }
 
-    // Weld magnetized vertices from highest index to lowest
+    // Weld magnetized vertices from highest index to lowest, adjusting remaining indices upon deletion
     for (Int32 k = numUnique - 1; k >= 0; --k)
     {
         Int32 nv = newVerts[k];
@@ -2047,33 +2132,17 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         {
             m_builder.WeldVertices(retopo, nv, tw);
             newVerts[k] = tw;
-        }
-    }
-    m_loopWeldTargets.Reset();
 
-    // Additional auto-weld check for any newly created vertices on drop
-    for (Int32 k = numUnique - 1; k >= 0; --k)
-    {
-        Int32 nv = newVerts[k];
-        if (nv == NOTOK || nv >= retopo->GetPointCount()) continue;
-        Vector wPos = retopo->GetMg() * retopo->GetPointR()[nv];
-        Vector sPos = bd->WS(wPos);
-        if (sPos.z <= 0.0) continue;
-
-        Int32 targetV = m_snapper.FindNearestRetopoVertex(bd, retopo, sPos.x, sPos.y, 14.0, nv, target);
-        if (targetV != NOTOK)
-        {
-            Bool isNewVert = false;
-            for (Int32 j = 0; j < numUnique; ++j)
-                if (newVerts[j] == targetV) { isNewVert = true; break; }
-
-            if (!isNewVert && targetV < retopo->GetPointCount())
+            for (Int32 j = 0; j < k; ++j)
             {
-                m_builder.WeldVertices(retopo, nv, targetV);
-                newVerts[k] = targetV;
+                if (newVerts[j] > nv)
+                    newVerts[j]--;
+                if (m_loopWeldTargets[j] > nv)
+                    m_loopWeldTargets[j]--;
             }
         }
     }
+    m_loopWeldTargets.Reset();
 
     doc->EndUndo();
     EventAdd();
@@ -2173,12 +2242,56 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
     lastPts.Resize(numVerts) iferr_ignore("Resize");
     lastNorms.Resize(numVerts) iferr_ignore("Resize");
 
+    maxon::BaseArray<Vector> initNorms;
+    initNorms.Resize(numVerts) iferr_ignore("Resize");
+
     for (Int32 k = 0; k < numVerts; ++k)
     {
         initPts[k] = rMg * pts[loopVerts[k]];
         sPts[k] = bd->WS(initPts[k]);
         lastPts[k] = initPts[k];
-        lastNorms[k] = Vector(0.0, 1.0, 0.0);
+
+        Int32 vIdx = loopVerts[k];
+        Vector vNorm(0.0);
+        for (Int32 p = 0; p < polyCount; ++p)
+        {
+            const CPolygon& poly = oldPolys[p];
+            if (poly.a == vIdx || poly.b == vIdx || poly.c == vIdx || (poly.c != poly.d && poly.d == vIdx))
+            {
+                Vector pA = rMg * pts[poly.a];
+                Vector pB = rMg * pts[poly.b];
+                Vector pC = rMg * pts[poly.c];
+                Vector fn = Cross(pB - pA, pC - pA);
+                if (fn.GetSquaredLength() > 1e-6)
+                    vNorm += fn.GetNormalized();
+            }
+        }
+        if (vNorm.GetSquaredLength() > 1e-6)
+            initNorms[k] = vNorm.GetNormalized();
+        else
+            initNorms[k] = Vector(0.0, 1.0, 0.0);
+
+        if (target)
+        {
+            SnapResult tSnap = m_snapper.ProjectPointAlongNormal(target, initPts[k], initNorms[k], 100.0);
+            if (tSnap.valid)
+                initNorms[k] = tSnap.normal;
+        }
+        lastNorms[k] = initNorms[k];
+    }
+
+    Int32 pivotIdx = 0;
+    Float minPivotDistSq = 1e30;
+    for (Int32 k = 0; k < numVerts; ++k)
+    {
+        Float px = sPts[k].x - mx;
+        Float py = sPts[k].y - my;
+        Float dSq = px * px + py * py;
+        if (dSq < minPivotDistSq)
+        {
+            minPivotDistSq = dSq;
+            pivotIdx = k;
+        }
     }
 
     BaseContainer device;
@@ -2214,40 +2327,60 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         Matrix invMg = ~retopo->GetMg();
         Bool hasWeldTarget = false;
 
+        // Compute 3D translation vector for the entire loop based on the active pivot
+        Float currPivotSx = sPts[pivotIdx].x + totalDx;
+        Float currPivotSy = sPts[pivotIdx].y + totalDy;
+
+        Vector delta3D(0.0);
+        Bool hasPivotHit = false;
+        Vector pivotHitPos(0.0);
+
+        if (target)
+        {
+            SnapResult pivotHit = m_snapper.RaycastSurface(bd, target, currPivotSx, currPivotSy);
+            if (pivotHit.valid)
+            {
+                pivotHitPos = pivotHit.worldPos;
+                hasPivotHit = true;
+                delta3D = pivotHitPos - initPts[pivotIdx];
+            }
+        }
+
+        if (!hasPivotHit && bd)
+        {
+            Vector candPivot = bd->SW_Reference(currPivotSx, currPivotSy, initPts[pivotIdx]);
+            delta3D = candPivot - initPts[pivotIdx];
+        }
+
+        for (Int32 k = 0; k < numVerts; ++k)
+            m_loopWeldTargets[k] = NOTOK;
+
         for (Int32 k = 0; k < numVerts; ++k)
         {
-            m_loopWeldTargets[k] = NOTOK;
-            Float currSx = sPts[k].x + totalDx;
-            Float currSy = sPts[k].y + totalDy;
-            Vector newPos = initPts[k];
-            Bool gotPos = false;
+            Vector candidatePos = initPts[k] + delta3D;
+            Vector newPos = candidatePos;
 
-            if (target)
+            if (k == pivotIdx && hasPivotHit)
             {
-                SnapResult h = m_snapper.RaycastSurface(bd, target, currSx, currSy);
-                if (h.valid)
+                newPos = pivotHitPos;
+            }
+            else if (target)
+            {
+                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 200.0);
+                if (snap.valid)
                 {
-                    newPos = h.worldPos;
-                    lastPts[k] = newPos;
-                    lastNorms[k] = h.normal;
-                    gotPos = true;
+                    newPos = snap.worldPos;
+                    lastNorms[k] = snap.normal;
                 }
                 else
                 {
-                    Vector cand = bd->SW_Reference(currSx, currSy, lastPts[k]);
-                    SnapResult pr = m_snapper.ProjectPointAlongNormal(target, cand, lastNorms[k], 500.0);
-                    if (pr.valid)
+                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 500.0);
+                    if (snap2.valid)
                     {
-                        newPos = pr.worldPos;
-                        gotPos = true;
+                        newPos = snap2.worldPos;
+                        lastNorms[k] = snap2.normal;
                     }
                 }
-            }
-
-            if (!gotPos && bd)
-            {
-                newPos = bd->SW_Reference(currSx, currSy, initPts[k]);
-                gotPos = true;
             }
 
             // Real-time magnetic snap for boundary vertices
@@ -2255,24 +2388,42 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
             if (lv >= 0 && lv < ptCount && m_builder.IsBoundaryOrIsolatedVertex(retopo, lv))
             {
                 Vector curScreen = bd->WS(newPos);
-                Int32 candWeld = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 14.0, lv, target);
-                if (candWeld != NOTOK && m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld))
+                if (curScreen.z > 0.0)
                 {
-                    Bool isSelf = false;
-                    for (Int32 j = 0; j < numVerts; ++j)
+                    Int32 candWeld = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen.x, curScreen.y, 14.0, lv, target);
+                    if (candWeld != NOTOK && m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld))
                     {
-                        if (loopVerts[j] == candWeld) { isSelf = true; break; }
-                    }
-                    if (!isSelf)
-                    {
-                        Vector targetPos = retopo->GetMg() * retopo->GetPointR()[candWeld];
-                        Vector targetScreen = bd->WS(targetPos);
-                        Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
-                        if (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff)
+                        Bool isSelf = false;
+                        for (Int32 j = 0; j < numVerts; ++j)
                         {
-                            newPos = targetPos; // Magnetize / snap!
-                            m_loopWeldTargets[k] = candWeld;
-                            hasWeldTarget = true;
+                            if (loopVerts[j] == candWeld) { isSelf = true; break; }
+                        }
+
+                        Bool alreadyClaimed = false;
+                        if (!isSelf)
+                        {
+                            for (Int32 j = 0; j < numVerts; ++j)
+                            {
+                                if (m_loopWeldTargets[j] == candWeld)
+                                {
+                                    alreadyClaimed = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!isSelf && !alreadyClaimed)
+                        {
+                            Vector targetPos = retopo->GetMg() * retopo->GetPointR()[candWeld];
+                            Vector targetScreen = bd->WS(targetPos);
+                            Float maxDepthDiff = maxon::Max(Float(6.0), Float(curScreen.z * 0.015));
+                            Float worldDist = (targetPos - newPos).GetLength();
+                            if (std::abs(targetScreen.z - curScreen.z) <= maxDepthDiff && worldDist < 50.0)
+                            {
+                                newPos = targetPos; // Magnetize / snap!
+                                m_loopWeldTargets[k] = candWeld;
+                                hasWeldTarget = true;
+                            }
                         }
                     }
                 }
@@ -2399,7 +2550,7 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         return true;
     }
 
-    // Weld magnetized vertices from highest index to lowest
+    // Weld magnetized vertices from highest index to lowest, adjusting remaining indices upon deletion
     for (Int32 k = numVerts - 1; k >= 0; --k)
     {
         Int32 lv = loopVerts[k];
@@ -2408,6 +2559,12 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         {
             m_builder.WeldVertices(retopo, lv, tw);
             loopVerts[k] = tw;
+
+            for (Int32 j = 0; j < k; ++j)
+            {
+                if (loopVerts[j] > lv) loopVerts[j]--;
+                if (m_loopWeldTargets[j] > lv) m_loopWeldTargets[j]--;
+            }
         }
     }
     m_loopWeldTargets.Reset();
