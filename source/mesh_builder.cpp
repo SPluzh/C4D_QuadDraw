@@ -988,8 +988,10 @@ static Int32 GetNextLoopStep(const PolygonObject* mesh, Int32 prevVertex, Int32 
 
     if (isBoundary)
     {
-        Int32 bestCand = NOTOK;
-        Float bestCosAngle = -2.0;
+        // A continuous boundary edge loop must transition across adjacent faces.
+        // At an outer patch corner, only 1 polygon exists at the vertex. An edge loop stops at patch corners.
+        if (polysAtCurr.GetCount() < 2)
+            return NOTOK;
 
         const Vector* pts = mesh->GetPointR();
         Matrix mg = mesh->GetMg();
@@ -998,7 +1000,24 @@ static Int32 GetNextLoopStep(const PolygonObject* mesh, Int32 prevVertex, Int32 
         Vector vIn = posCurr - posPrev;
         Float lenIn = vIn.GetLength();
 
-        // Border loop: find best boundary edge continuation in a straight line
+        // Identify which polygon contains the incoming boundary edge (prevVertex, currVertex)
+        Int32 inPoly = NOTOK;
+        for (Int32 i = 0; i < (Int32)polysAtCurr.GetCount(); ++i)
+        {
+            if (PolygonHasEdge(polys[polysAtCurr[i]], prevVertex, currVertex))
+            {
+                inPoly = polysAtCurr[i];
+                break;
+            }
+        }
+
+        Int32 bestCand = NOTOK;
+        Float bestCosAngle = -2.0;
+        Int32 boundaryCandCount = 0;
+
+        maxon::BaseArray<Int32> visitedCands;
+
+        // Border loop: find boundary edge continuation
         for (Int32 i = 0; i < (Int32)polysAtCurr.GetCount(); ++i)
         {
             const CPolygon& p = polys[polysAtCurr[i]];
@@ -1017,14 +1036,33 @@ static Int32 GetNextLoopStep(const PolygonObject* mesh, Int32 prevVertex, Int32 
                         Int32 cand = (c == 0) ? cand1 : cand2;
                         if (cand != prevVertex && cand != NOTOK)
                         {
-                            Int32 sharing = 0;
-                            for (Int32 j = 0; j < polyCount; ++j)
+                            Bool alreadySeen = false;
+                            for (Int32 vi = 0; vi < (Int32)visitedCands.GetCount(); ++vi)
                             {
-                                if (PolygonHasEdge(polys[j], currVertex, cand))
+                                if (visitedCands[vi] == cand) { alreadySeen = true; break; }
+                            }
+                            if (alreadySeen) continue;
+                            visitedCands.Append(cand) iferr_ignore("Append visited cand");
+
+                            Int32 sharing = 0;
+                            Int32 outPoly = NOTOK;
+                            for (Int32 j = 0; j < (Int32)polysAtCurr.GetCount(); ++j)
+                            {
+                                if (PolygonHasEdge(polys[polysAtCurr[j]], currVertex, cand))
+                                {
                                     sharing++;
+                                    outPoly = polysAtCurr[j];
+                                }
                             }
                             if (sharing == 1)
                             {
+                                // A continuous edge loop along the boundary must transition across adjacent faces.
+                                // If the incoming boundary edge and candidate boundary edge belong to the same polygon,
+                                // this is an outer corner of a patch, not a continuous edge loop.
+                                if (inPoly != NOTOK && outPoly == inPoly)
+                                    continue;
+
+                                boundaryCandCount++;
                                 Vector posCand = mg * pts[cand];
                                 Vector vOut = posCand - posCurr;
                                 Float lenOut = vOut.GetLength();
@@ -1044,8 +1082,20 @@ static Int32 GetNextLoopStep(const PolygonObject* mesh, Int32 prevVertex, Int32 
             }
         }
 
-        // Only continue along boundary if roughly straight (no sharp turn > 45 degrees)
-        if (bestCand != NOTOK && bestCosAngle >= 0.707)
+        if (bestCand == NOTOK)
+            return NOTOK;
+
+        // If there is only one boundary continuation, it is the unique manifold boundary.
+        // Follow it as long as it does not fold completely back on itself (cosAngle > -0.8).
+        if (boundaryCandCount == 1)
+        {
+            if (bestCosAngle > -0.8)
+                return bestCand;
+            return NOTOK;
+        }
+
+        // If there are multiple boundary candidates (branching junction), choose the straightest path.
+        if (bestCosAngle >= 0.0)
             return bestCand;
 
         return NOTOK;
