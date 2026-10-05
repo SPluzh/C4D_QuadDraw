@@ -9,6 +9,7 @@ enum
     QUADDRAW_TOOL_MOVE              = 3,
     QUADDRAW_TOOL_KNIFE             = 1,
     QUADDRAW_TOOL_MULTICUT          = 2,
+    QUADDRAW_TOOL_DELETE            = 4,
 
     QUADDRAW_GROUP_DISPLAY          = 2000,
     QUADDRAW_DISABLE_CUSTOM_SHADING = 2006,

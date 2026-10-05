@@ -475,12 +475,15 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
 
     // =========================================================================
-    // MODE 1: CTRL + SHIFT HELD (DELETE MODE - Maya style)
+    // MODE 1: DELETE MODE (ACTIVE TOOL == DELETE)
     // =========================================================================
-    if (m_ctrlHeld && m_shiftHeld)
+    Bool isDeleteMode = (activeTool == QUADDRAW_TOOL_DELETE);
+    if (isDeleteMode)
     {
         m_shiftQuadPreview.valid = false;
-        m_deleteHighlight.type = DeleteTargetType::None;
+        m_deleteHighlight.Reset();
+
+        Bool deleteChain = m_ctrlHeld;
 
         if (retopo)
         {
@@ -520,6 +523,11 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                     m_deleteHighlight.type = DeleteTargetType::Vertex;
                     m_deleteHighlight.index = bestPolyV;
                     m_deleteHighlight.worldPos0 = rMg * pts[bestPolyV];
+                    m_deleteHighlight.isLoop = deleteChain;
+                    if (deleteChain)
+                    {
+                        m_deleteHighlight.loopVertices = m_builder.FindVertexLoop(bd, retopo, bestPolyV, x, y, &m_deleteHighlight.loopEdges);
+                    }
                 }
                 else
                 {
@@ -532,9 +540,12 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                         m_deleteHighlight.edgeV1 = polyEdge.v1;
                         m_deleteHighlight.worldPos0 = polyEdge.worldPos0;
                         m_deleteHighlight.worldPos1 = polyEdge.worldPos1;
-
-                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
-                        m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        m_deleteHighlight.isLoop = deleteChain;
+                        if (deleteChain)
+                        {
+                            EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
+                            m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        }
                     }
                     else
                     {
@@ -546,6 +557,14 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                         m_deleteHighlight.polyPts[1] = rMg * pts[p.b];
                         m_deleteHighlight.polyPts[2] = rMg * pts[p.c];
                         m_deleteHighlight.polyPts[3] = rMg * pts[p.d];
+                        m_deleteHighlight.isLoop = deleteChain;
+                        if (deleteChain)
+                        {
+                            EdgeHit pe = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, x, y);
+                            Int32 enterV0 = pe.valid ? pe.v0 : p.a;
+                            Int32 enterV1 = pe.valid ? pe.v1 : p.b;
+                            m_deleteHighlight.loopPolygons = m_builder.FindPolygonLoop(retopo, underPoly, enterV0, enterV1);
+                        }
                     }
                 }
             }
@@ -558,6 +577,11 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                     m_deleteHighlight.type = DeleteTargetType::Vertex;
                     m_deleteHighlight.index = nearVertex;
                     m_deleteHighlight.worldPos0 = retopo->GetMg() * retopo->GetPointR()[nearVertex];
+                    m_deleteHighlight.isLoop = deleteChain;
+                    if (deleteChain)
+                    {
+                        m_deleteHighlight.loopVertices = m_builder.FindVertexLoop(bd, retopo, nearVertex, x, y, &m_deleteHighlight.loopEdges);
+                    }
                 }
                 else
                 {
@@ -569,9 +593,12 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                         m_deleteHighlight.edgeV1 = edgeHit.v1;
                         m_deleteHighlight.worldPos0 = edgeHit.worldPos0;
                         m_deleteHighlight.worldPos1 = edgeHit.worldPos1;
-
-                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, edgeHit.v0, edgeHit.v1);
-                        m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        m_deleteHighlight.isLoop = deleteChain;
+                        if (deleteChain)
+                        {
+                            EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, edgeHit.v0, edgeHit.v1);
+                            m_deleteHighlight.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        }
                     }
                 }
             }
@@ -581,27 +608,44 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
         String status;
         if (m_deleteHighlight.type == DeleteTargetType::Vertex)
-            status = FormatString("QuadDraw [DELETE] | Click to Delete Vertex #@"_s, m_deleteHighlight.index);
+        {
+            if (m_deleteHighlight.isLoop && m_deleteHighlight.loopVertices.GetCount() > 0)
+                status = FormatString("QuadDraw [DELETE] | Click to Delete Vertex Loop (@ vertices)"_s, (Int32)m_deleteHighlight.loopVertices.GetCount());
+            else
+                status = FormatString("QuadDraw [DELETE] | Click to Delete Vertex #@ | Hold Ctrl: Delete Loop"_s, m_deleteHighlight.index);
+        }
         else if (m_deleteHighlight.type == DeleteTargetType::Edge)
-            status = FormatString("QuadDraw [DELETE] | Click to Delete Edge Loop (@ edges)"_s, (Int32)m_deleteHighlight.loopEdges.GetCount());
+        {
+            if (m_deleteHighlight.isLoop && m_deleteHighlight.loopEdges.GetCount() > 0)
+                status = FormatString("QuadDraw [DELETE] | Click to Delete Edge Loop (@ edges)"_s, (Int32)m_deleteHighlight.loopEdges.GetCount());
+            else
+                status = FormatString("QuadDraw [DELETE] | Click to Delete Edge (#@ - #@) | Hold Ctrl: Delete Loop"_s, m_deleteHighlight.edgeV0, m_deleteHighlight.edgeV1);
+        }
         else if (m_deleteHighlight.type == DeleteTargetType::Polygon)
-            status = FormatString("QuadDraw [DELETE] | Click to Delete Polygon #@"_s, m_deleteHighlight.index);
+        {
+            if (m_deleteHighlight.isLoop && m_deleteHighlight.loopPolygons.GetCount() > 0)
+                status = FormatString("QuadDraw [DELETE] | Click to Delete Polygon Loop (@ polygons)"_s, (Int32)m_deleteHighlight.loopPolygons.GetCount());
+            else
+                status = FormatString("QuadDraw [DELETE] | Click to Delete Polygon #@ | Hold Ctrl: Delete Loop"_s, m_deleteHighlight.index);
+        }
         else
-            status = "QuadDraw [DELETE] | Hover over Point, Edge, or Polygon to delete (Ctrl+Shift+LMB)"_s;
+        {
+            status = deleteChain ? "QuadDraw [DELETE] | Hold Ctrl: Hover over Point, Edge, or Polygon to delete Loop"_s
+                                 : "QuadDraw [DELETE] | Hover over Point, Edge, or Polygon to delete (Hold Ctrl for Loop)"_s;
+        }
 
         StatusSetText(status);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
 
-    // Clear delete highlight when not in Ctrl+Shift mode
-    m_deleteHighlight.type = DeleteTargetType::None;
-    m_deleteHighlight.loopEdges.Reset();
+    // Clear delete highlight when not in Delete mode
+    m_deleteHighlight.Reset();
 
     // =========================================================================
     // MODE 2: CTRL HELD ALONE (COMPONENT LOOP HIGHLIGHT - Vertex, Edge, Polygon Loop)
     // =========================================================================
-    if (m_ctrlHeld && !m_shiftHeld && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE)
+    if (m_ctrlHeld && !m_shiftHeld && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE && activeTool != QUADDRAW_TOOL_DELETE)
     {
         m_shiftQuadPreview.valid = false;
         m_edgeCutPreview.valid = false;
@@ -726,10 +770,17 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
         Float brushStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
 
-        // Check quad creation preview only if retopo has at least 4 vertices and not in Move mode
-        if (activeTool != QUADDRAW_TOOL_MOVE && retopo && retopo->GetPointCount() >= 4)
+        // Check quad creation preview if retopo has at least 4 vertices (available in Extrude and Move/Tweak modes)
+        Bool canCreateQuad = (activeTool == QUADDRAW_TOOL_QUAD || activeTool == QUADDRAW_TOOL_MOVE);
+        if (canCreateQuad && retopo && retopo->GetPointCount() >= 4)
         {
             Vector viewNormal = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
+            if (target)
+            {
+                SnapResult snap = m_snapper.RaycastSurface(bd, target, x, y);
+                if (snap.valid)
+                    viewNormal = snap.normal;
+            }
             m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y, target, &m_snapper);
         }
         else
@@ -1260,13 +1311,13 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         }
     }
 
-    // 4. Empty surface hover -> ready to place point (only if not Move tool)
-    if (activeTool == QUADDRAW_TOOL_MOVE)
+    // 4. Empty surface hover -> ready to place point
+    if (activeTool == QUADDRAW_TOOL_DELETE)
     {
         m_hoverSnap.valid = false;
-        bc.SetInt32(RESULT_CURSOR, MOUSE_NORMAL);
-        StatusSetText(FormatString("QuadDraw [MOVE] | Drag Vertices, Edges, or Polygons to Move / Tweak | Mesh: @ | Target: @"_s,
-            retopo ? retopo->GetName() : "None"_s, targetName));
+        bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
+        StatusSetText(m_ctrlHeld ? "QuadDraw [DELETE] | Hold Ctrl: Hover over Point, Edge, or Polygon to delete Loop"_s
+                                : "QuadDraw [DELETE] | Hover over Point, Edge, or Polygon to delete (Hold Ctrl for Loop)"_s);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -1292,8 +1343,16 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     if (m_hoverSnap.valid)
     {
         bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
-        StatusSetText(FormatString("QuadDraw | LMB: Place Point | Shift+Hover: Preview Quad | Mesh: @ | Target: @"_s,
-            retopo ? retopo->GetName() : "None"_s, targetName));
+        if (activeTool == QUADDRAW_TOOL_MOVE)
+        {
+            StatusSetText(FormatString("QuadDraw [MOVE] | LMB: Place Point | Drag Components to Move | Mesh: @ | Target: @"_s,
+                retopo ? retopo->GetName() : "None"_s, targetName));
+        }
+        else
+        {
+            StatusSetText(FormatString("QuadDraw | LMB: Place Point | Shift+Hover: Preview Quad | Mesh: @ | Target: @"_s,
+                retopo ? retopo->GetName() : "None"_s, targetName));
+        }
     }
     else
     {
@@ -2558,15 +2617,18 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
 
     // ==========================================
-    // ACTION 1: CTRL + SHIFT + LMB -> DELETE ELEMENT
+    // ACTION 1: DELETE ELEMENT (DELETE TOOL)
     // ==========================================
-    if ((qualifier & QCTRL) && (qualifier & QSHIFT))
+    Bool isDeleteAction = (activeTool == QUADDRAW_TOOL_DELETE);
+    if (isDeleteAction)
     {
+        Bool deleteChain = (qualifier & QCTRL);
         DeleteHighlight& del = m_deleteHighlight;
 
         // If not already detected by GetCursorInfo, run on-the-spot detection
         if (del.type == DeleteTargetType::None)
         {
+            del.isLoop = deleteChain;
             Float polyZ = 1e30;
             Int32 underPoly = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper, &polyZ);
 
@@ -2600,6 +2662,11 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 {
                     del.type = DeleteTargetType::Vertex;
                     del.index = bestPolyV;
+                    del.isLoop = deleteChain;
+                    if (deleteChain)
+                    {
+                        del.loopVertices = m_builder.FindVertexLoop(bd, retopo, bestPolyV, mx, my, &del.loopEdges);
+                    }
                 }
                 else
                 {
@@ -2609,13 +2676,25 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                         del.type = DeleteTargetType::Edge;
                         del.edgeV0 = polyEdge.v0;
                         del.edgeV1 = polyEdge.v1;
-                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
-                        del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        del.isLoop = deleteChain;
+                        if (deleteChain)
+                        {
+                            EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, polyEdge.v0, polyEdge.v1);
+                            del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        }
                     }
                     else
                     {
                         del.type = DeleteTargetType::Polygon;
                         del.index = underPoly;
+                        del.isLoop = deleteChain;
+                        if (deleteChain)
+                        {
+                            EdgeHit pe = m_builder.FindClosestEdgeOfPolygon(bd, retopo, underPoly, mx, my);
+                            Int32 enterV0 = pe.valid ? pe.v0 : p.a;
+                            Int32 enterV1 = pe.valid ? pe.v1 : p.b;
+                            del.loopPolygons = m_builder.FindPolygonLoop(retopo, underPoly, enterV0, enterV1);
+                        }
                     }
                 }
             }
@@ -2626,6 +2705,11 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 {
                     del.type = DeleteTargetType::Vertex;
                     del.index = nv;
+                    del.isLoop = deleteChain;
+                    if (deleteChain)
+                    {
+                        del.loopVertices = m_builder.FindVertexLoop(bd, retopo, nv, mx, my, &del.loopEdges);
+                    }
                 }
                 else
                 {
@@ -2635,57 +2719,103 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                         del.type = DeleteTargetType::Edge;
                         del.edgeV0 = eh.v0;
                         del.edgeV1 = eh.v1;
-                        EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, eh.v0, eh.v1);
-                        del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        del.isLoop = deleteChain;
+                        if (deleteChain)
+                        {
+                            EdgeLoopResult loop = m_builder.FindEdgeLoop(retopo, eh.v0, eh.v1);
+                            del.loopEdges.CopyFrom(loop.edges) iferr_ignore("Copy loop edges");
+                        }
                     }
                 }
             }
         }
 
-        if (del.type == DeleteTargetType::Vertex && del.index != NOTOK)
+        if (del.type == DeleteTargetType::Vertex)
         {
-            doc->StartUndo();
-            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
-            m_builder.DeleteVertex(retopo, del.index);
-            m_deleteHighlight.type = DeleteTargetType::None;
-            m_deleteHighlight.loopEdges.Reset();
-            m_shiftQuadPreview.valid = false;
-            doc->EndUndo();
-            EventAdd();
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            StatusSetText("QuadDraw: Deleted vertex"_s);
-            return true;
+            if (del.isLoop && del.loopVertices.GetCount() > 0)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_builder.DeleteVertices(retopo, del.loopVertices);
+                m_deleteHighlight.Reset();
+                m_shiftQuadPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                StatusSetText("QuadDraw: Deleted vertex loop"_s);
+                return true;
+            }
+            else if (del.index != NOTOK)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_builder.DeleteVertex(retopo, del.index);
+                m_deleteHighlight.Reset();
+                m_shiftQuadPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                StatusSetText("QuadDraw: Deleted vertex"_s);
+                return true;
+            }
         }
-        else if (del.type == DeleteTargetType::Edge && (del.loopEdges.GetCount() > 0 || (del.edgeV0 != NOTOK && del.edgeV1 != NOTOK)))
+        else if (del.type == DeleteTargetType::Edge)
         {
-            doc->StartUndo();
-            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
-            if (del.loopEdges.GetCount() > 0)
+            if (del.isLoop && del.loopEdges.GetCount() > 0)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
                 m_builder.DeleteEdgeLoop(retopo, del.loopEdges);
-            else
-                m_builder.DeleteEdge(retopo, del.edgeV0, del.edgeV1);
-            m_deleteHighlight.type = DeleteTargetType::None;
-            m_deleteHighlight.loopEdges.Reset();
-            m_shiftQuadPreview.valid = false;
-            doc->EndUndo();
-            EventAdd();
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            StatusSetText("QuadDraw: Deleted edge loop"_s);
-            return true;
+                m_deleteHighlight.Reset();
+                m_shiftQuadPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                StatusSetText("QuadDraw: Deleted edge loop"_s);
+                return true;
+            }
+            else if (del.edgeV0 != NOTOK && del.edgeV1 != NOTOK)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_builder.DeleteSingleEdge(retopo, del.edgeV0, del.edgeV1);
+                m_deleteHighlight.Reset();
+                m_shiftQuadPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                StatusSetText("QuadDraw: Deleted edge"_s);
+                return true;
+            }
         }
-        else if (del.type == DeleteTargetType::Polygon && del.index != NOTOK)
+        else if (del.type == DeleteTargetType::Polygon)
         {
-            doc->StartUndo();
-            doc->AddUndo(UNDOTYPE::CHANGE, retopo);
-            m_builder.DeletePolygon(retopo, del.index);
-            m_deleteHighlight.type = DeleteTargetType::None;
-            m_deleteHighlight.loopEdges.Reset();
-            m_shiftQuadPreview.valid = false;
-            doc->EndUndo();
-            EventAdd();
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-            StatusSetText("QuadDraw: Deleted polygon"_s);
-            return true;
+            if (del.isLoop && del.loopPolygons.GetCount() > 0)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_builder.DeletePolygons(retopo, del.loopPolygons);
+                m_deleteHighlight.Reset();
+                m_shiftQuadPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                StatusSetText("QuadDraw: Deleted polygon loop"_s);
+                return true;
+            }
+            else if (del.index != NOTOK)
+            {
+                doc->StartUndo();
+                doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                m_builder.DeletePolygon(retopo, del.index);
+                m_deleteHighlight.Reset();
+                m_shiftQuadPreview.valid = false;
+                doc->EndUndo();
+                EventAdd();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                StatusSetText("QuadDraw: Deleted polygon"_s);
+                return true;
+            }
         }
 
         return true;
@@ -2694,7 +2824,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // ==========================================
     // ACTION 2: CTRL (alone) + LMB -> COMPONENT LOOP (SELECT / EXTRUDE / MOVE)
     // ==========================================
-    if ((qualifier & QCTRL) && !(qualifier & QSHIFT) && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE)
+    if ((qualifier & QCTRL) && !(qualifier & QSHIFT) && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE && activeTool != QUADDRAW_TOOL_DELETE)
     {
         // If m_componentLoop was not detected yet (e.g. rapid click), detect on the spot
         if (m_componentLoop.type == ComponentLoopType::None)
@@ -3779,9 +3909,9 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // Priority 4: Place Point
-    if (activeTool == QUADDRAW_TOOL_MOVE)
+    if (activeTool == QUADDRAW_TOOL_DELETE)
     {
-        return true; // In Move mode, do not place points on empty surface
+        return true; // In Delete mode, do not place points on empty surface
     }
     Vector dropPos;
     Bool canPlace = false;
@@ -4203,7 +4333,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         {
             bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(true));
             bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_LOWEREQUAL));
-            bd->LineZOffset(0);
+            bd->LineZOffset(3);
         }
         else
         {
@@ -4212,22 +4342,22 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
         Vector greenColors[4] = { previewColor, previewColor, previewColor, previewColor };
 
-        bd->SetTransparency(transVal);
+        bd->SetTransparency(-140);
         bd->DrawPolygon(prevPts, greenColors, true);
         bd->DrawArrayEnd();
 
         // Bright contour lines
         bd->SetTransparency(0);
         bd->SetPen(previewColor);
-        drawThickLine(prevPts[0], prevPts[1], hoverLineWidth, disableXRay, 3);
-        drawThickLine(prevPts[1], prevPts[2], hoverLineWidth, disableXRay, 3);
-        drawThickLine(prevPts[2], prevPts[3], hoverLineWidth, disableXRay, 3);
-        drawThickLine(prevPts[3], prevPts[0], hoverLineWidth, disableXRay, 3);
+        drawThickLine(prevPts[0], prevPts[1], hoverLineWidth + 0.8, disableXRay, 4);
+        drawThickLine(prevPts[1], prevPts[2], hoverLineWidth + 0.8, disableXRay, 4);
+        drawThickLine(prevPts[2], prevPts[3], hoverLineWidth + 0.8, disableXRay, 4);
+        drawThickLine(prevPts[3], prevPts[0], hoverLineWidth + 0.8, disableXRay, 4);
 
         // Highlight the 4 corner vertices
         for (Int32 k = 0; k < 4; ++k)
         {
-            drawPoint(prevPts[k], previewColor, pointSize + 2.0, disableXRay);
+            drawPoint(prevPts[k], previewColor, pointSize + 2.5, disableXRay);
         }
     }
 
@@ -4480,22 +4610,52 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         }
     }
 
-    // 4. Draw Red Deletion Highlight when Ctrl + Shift are held (Maya QuadDraw Delete Mode)
-    if (m_ctrlHeld && m_shiftHeld && m_deleteHighlight.type != DeleteTargetType::None)
+    // 4. Draw Red Deletion Highlight when Delete Tool is active
+    Bool isDeleteActive = (activeTool == QUADDRAW_TOOL_DELETE);
+    if (isDeleteActive && m_deleteHighlight.type != DeleteTargetType::None)
     {
         const Vector deleteRed(1.0, 0.15, 0.15);
 
         if (m_deleteHighlight.type == DeleteTargetType::Vertex)
         {
-            // Red highlighted vertex
-            drawPoint(m_deleteHighlight.worldPos0, deleteRed, pointSize + 2.0, disableXRay);
+            if (m_deleteHighlight.isLoop && m_deleteHighlight.loopVertices.GetCount() > 0)
+            {
+                if (retopo)
+                {
+                    Matrix rMg = retopo->GetMg();
+                    const Vector* rPts = retopo->GetPointR();
+                    Int32 ptCount = retopo->GetPointCount();
+                    for (Int32 vi = 0; vi < (Int32)m_deleteHighlight.loopVertices.GetCount(); ++vi)
+                    {
+                        Int32 vIdx = m_deleteHighlight.loopVertices[vi];
+                        if (vIdx >= 0 && vIdx < ptCount)
+                        {
+                            drawPoint(rMg * rPts[vIdx], deleteRed, pointSize + 2.0, disableXRay);
+                        }
+                    }
+                }
+                if (m_deleteHighlight.loopEdges.GetCount() > 0)
+                {
+                    bd->SetTransparency(0);
+                    bd->SetPen(deleteRed);
+                    for (Int32 k = 0; k < (Int32)m_deleteHighlight.loopEdges.GetCount(); ++k)
+                    {
+                        const LoopEdge& le = m_deleteHighlight.loopEdges[k];
+                        drawThickLine(le.worldPos0, le.worldPos1, hoverLineWidth, disableXRay, 3);
+                    }
+                }
+            }
+            else
+            {
+                // Red highlighted single vertex
+                drawPoint(m_deleteHighlight.worldPos0, deleteRed, pointSize + 2.0, disableXRay);
+            }
         }
         else if (m_deleteHighlight.type == DeleteTargetType::Edge)
         {
-            // Red highlighted edge loop (strip of edges)
             bd->SetTransparency(0);
             bd->SetPen(deleteRed);
-            if (m_deleteHighlight.loopEdges.GetCount() > 0)
+            if (m_deleteHighlight.isLoop && m_deleteHighlight.loopEdges.GetCount() > 0)
             {
                 for (Int32 k = 0; k < (Int32)m_deleteHighlight.loopEdges.GetCount(); ++k)
                 {
@@ -4514,7 +4674,6 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         }
         else if (m_deleteHighlight.type == DeleteTargetType::Polygon)
         {
-            // Red highlighted polygon face
             const Vector redFace(0.9, 0.18, 0.18);
             Vector redColors[4] = { redFace, redFace, redFace, redFace };
 
@@ -4529,28 +4688,77 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
             }
 
-            bd->SetTransparency(-140);
-            bd->DrawPolygon(m_deleteHighlight.polyPts, redColors, m_deleteHighlight.polyIsQuad);
-            bd->DrawArrayEnd();
-
-            bd->SetTransparency(0);
-            bd->SetPen(deleteRed);
-            drawThickLine(m_deleteHighlight.polyPts[0], m_deleteHighlight.polyPts[1], hoverLineWidth, disableXRay, 3);
-            drawThickLine(m_deleteHighlight.polyPts[1], m_deleteHighlight.polyPts[2], hoverLineWidth, disableXRay, 3);
-            if (m_deleteHighlight.polyIsQuad)
+            if (m_deleteHighlight.isLoop && m_deleteHighlight.loopPolygons.GetCount() > 0)
             {
-                drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[3], hoverLineWidth, disableXRay, 3);
-                drawThickLine(m_deleteHighlight.polyPts[3], m_deleteHighlight.polyPts[0], hoverLineWidth, disableXRay, 3);
+                if (retopo)
+                {
+                    Matrix rMg = retopo->GetMg();
+                    const Vector* rPts = retopo->GetPointR();
+                    const CPolygon* rPolys = retopo->GetPolygonR();
+                    Int32 rPolyCount = retopo->GetPolygonCount();
+
+                    // Filled polygons
+                    bd->SetTransparency(-140);
+                    for (Int32 i = 0; i < (Int32)m_deleteHighlight.loopPolygons.GetCount(); ++i)
+                    {
+                        Int32 pIdx = m_deleteHighlight.loopPolygons[i];
+                        if (pIdx < 0 || pIdx >= rPolyCount) continue;
+                        const CPolygon& p = rPolys[pIdx];
+                        Bool isQuad = (p.c != p.d);
+                        Vector wPts[4] = { rMg * rPts[p.a], rMg * rPts[p.b], rMg * rPts[p.c], rMg * rPts[p.d] };
+                        bd->DrawPolygon(wPts, redColors, isQuad);
+                    }
+                    bd->DrawArrayEnd();
+
+                    // Boundary outlines
+                    bd->SetTransparency(0);
+                    bd->SetPen(deleteRed);
+                    for (Int32 i = 0; i < (Int32)m_deleteHighlight.loopPolygons.GetCount(); ++i)
+                    {
+                        Int32 pIdx = m_deleteHighlight.loopPolygons[i];
+                        if (pIdx < 0 || pIdx >= rPolyCount) continue;
+                        const CPolygon& p = rPolys[pIdx];
+                        Bool isQuad = (p.c != p.d);
+                        Vector wPts[4] = { rMg * rPts[p.a], rMg * rPts[p.b], rMg * rPts[p.c], rMg * rPts[p.d] };
+                        drawThickLine(wPts[0], wPts[1], hoverLineWidth, disableXRay, 3);
+                        drawThickLine(wPts[1], wPts[2], hoverLineWidth, disableXRay, 3);
+                        if (isQuad)
+                        {
+                            drawThickLine(wPts[2], wPts[3], hoverLineWidth, disableXRay, 3);
+                            drawThickLine(wPts[3], wPts[0], hoverLineWidth, disableXRay, 3);
+                        }
+                        else
+                        {
+                            drawThickLine(wPts[2], wPts[0], hoverLineWidth, disableXRay, 3);
+                        }
+                    }
+                }
             }
             else
             {
-                drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[0], hoverLineWidth, disableXRay, 3);
+                bd->SetTransparency(-140);
+                bd->DrawPolygon(m_deleteHighlight.polyPts, redColors, m_deleteHighlight.polyIsQuad);
+                bd->DrawArrayEnd();
+
+                bd->SetTransparency(0);
+                bd->SetPen(deleteRed);
+                drawThickLine(m_deleteHighlight.polyPts[0], m_deleteHighlight.polyPts[1], hoverLineWidth, disableXRay, 3);
+                drawThickLine(m_deleteHighlight.polyPts[1], m_deleteHighlight.polyPts[2], hoverLineWidth, disableXRay, 3);
+                if (m_deleteHighlight.polyIsQuad)
+                {
+                    drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[3], hoverLineWidth, disableXRay, 3);
+                    drawThickLine(m_deleteHighlight.polyPts[3], m_deleteHighlight.polyPts[0], hoverLineWidth, disableXRay, 3);
+                }
+                else
+                {
+                    drawThickLine(m_deleteHighlight.polyPts[2], m_deleteHighlight.polyPts[0], hoverLineWidth, disableXRay, 3);
+                }
             }
         }
     }
 
     // 5. Draw normal mode hover highlight (Edge or Polygon)
-    if (!m_shiftHeld && !m_ctrlHeld && m_activeDragMode == TweakMode::None)
+    if (!m_shiftHeld && !m_ctrlHeld && m_activeDragMode == TweakMode::None && activeTool != QUADDRAW_TOOL_DELETE)
     {
         if (m_hoverTweak.mode == TweakMode::Edge)
         {
@@ -4843,9 +5051,26 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 // Actively dragged polygon vertex in yellow
                 drawPoint(wPos, Vector(1.0, 0.9, 0.1), pointSize + 2.0, disableXRay, toCam);
             }
-            else if (m_ctrlHeld && m_shiftHeld && m_deleteHighlight.type == DeleteTargetType::Vertex && m_deleteHighlight.index == i)
+            else if (isDeleteActive && m_deleteHighlight.type == DeleteTargetType::Vertex)
             {
-                // Already drawn in delete highlight
+                if (m_deleteHighlight.isLoop)
+                {
+                    Bool inLoop = false;
+                    for (Int32 vi = 0; vi < (Int32)m_deleteHighlight.loopVertices.GetCount(); ++vi)
+                    {
+                        if (m_deleteHighlight.loopVertices[vi] == i) { inLoop = true; break; }
+                    }
+                    if (inLoop) { /* Already drawn in delete highlight */ }
+                    else { drawPoint(wPos, wireColor, pointSize, disableXRay, toCam); }
+                }
+                else if (m_deleteHighlight.index == i)
+                {
+                    // Already drawn in delete highlight
+                }
+                else
+                {
+                    drawPoint(wPos, wireColor, pointSize, disableXRay, toCam);
+                }
             }
             else if (!m_shiftHeld && !m_ctrlHeld && m_hoverTweak.mode == TweakMode::Vertex && m_hoverTweak.index == i)
             {
@@ -4969,8 +5194,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_cachedCutV1 = NOTOK;
         m_cachedCutT = -1.0;
         m_cachedCutPoly = NOTOK;
-        m_deleteHighlight.type = DeleteTargetType::None;
-        m_deleteHighlight.loopEdges.Reset();
+        m_deleteHighlight.Reset();
         m_componentLoop.Reset();
         m_multiCutPoints.Reset();
         m_multiCutPreview.valid = false;
@@ -5007,7 +5231,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: Extrude, Move / Tweak, Knife (Cut Loops), or Multi-Cut\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: Extrude, Move / Tweak, Knife (Cut Loops), Multi-Cut, or Delete\n- Delete Mode: LMB Click on Vertex, Edge, or Polygon to delete; Hold Ctrl to delete chains / loops\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }

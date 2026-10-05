@@ -8,6 +8,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_MOVE              "Перемещение (Move / Tweak)";
     QUADDRAW_TOOL_KNIFE             "Нож (Разрез петель)";
     QUADDRAW_TOOL_MULTICUT          "Мульти-разрез (Multi-Cut)";
+    QUADDRAW_TOOL_DELETE            "Удаление (Delete)";
 
     QUADDRAW_GROUP_DISPLAY          "Отображение";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Отключить кастомный шейдинг";

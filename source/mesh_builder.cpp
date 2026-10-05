@@ -556,6 +556,97 @@ Bool MeshBuilder::DeleteVertex(PolygonObject* mesh, Int32 ptIndex)
     return true;
 }
 
+Bool MeshBuilder::DeleteVertices(PolygonObject* mesh, const maxon::BaseArray<Int32>& ptIndices)
+{
+    if (!mesh || ptIndices.GetCount() == 0) return false;
+    Int32 ptCount = mesh->GetPointCount();
+    Int32 polyCount = mesh->GetPolygonCount();
+    if (ptCount == 0) return false;
+
+    maxon::BaseArray<Bool> vertDeleted;
+    vertDeleted.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) vertDeleted[i] = false;
+
+    for (Int32 i = 0; i < (Int32)ptIndices.GetCount(); ++i)
+    {
+        Int32 v = ptIndices[i];
+        if (v >= 0 && v < ptCount)
+            vertDeleted[v] = true;
+    }
+
+    const Vector* oldPoints = mesh->GetPointR();
+    const CPolygon* oldPolys = mesh->GetPolygonR();
+
+    maxon::BaseArray<CPolygon> remainingPolys;
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (vertDeleted[p.a] || vertDeleted[p.b] || vertDeleted[p.c] || (p.c != p.d && vertDeleted[p.d]))
+            continue;
+
+        remainingPolys.Append(p) iferr_ignore("Append poly");
+    }
+
+    maxon::BaseArray<Int32> pointUseCount;
+    pointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < (Int32)remainingPolys.GetCount(); ++i)
+    {
+        const CPolygon& p = remainingPolys[i];
+        if (p.a >= 0 && p.a < ptCount) pointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) pointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) pointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) pointUseCount[p.d]++;
+    }
+
+    maxon::BaseArray<Vector> newPoints;
+    maxon::BaseArray<Int32> oldToNew;
+    oldToNew.Resize(ptCount) iferr_ignore("Resize");
+
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        if (!vertDeleted[i] && pointUseCount[i] > 0)
+        {
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPoints[i]) iferr_ignore("Append point");
+        }
+        else
+        {
+            oldToNew[i] = NOTOK;
+        }
+    }
+
+    maxon::BaseArray<CPolygon> finalPolys;
+    for (Int32 i = 0; i < (Int32)remainingPolys.GetCount(); ++i)
+    {
+        const CPolygon& p = remainingPolys[i];
+        Bool isTri = (p.c == p.d);
+
+        Int32 nA = (p.a >= 0 && p.a < ptCount) ? oldToNew[p.a] : NOTOK;
+        Int32 nB = (p.b >= 0 && p.b < ptCount) ? oldToNew[p.b] : NOTOK;
+        Int32 nC = (p.c >= 0 && p.c < ptCount) ? oldToNew[p.c] : NOTOK;
+        Int32 nD = isTri ? nC : ((p.d >= 0 && p.d < ptCount) ? oldToNew[p.d] : NOTOK);
+
+        if (nA == NOTOK || nB == NOTOK || nC == NOTOK || nD == NOTOK)
+            continue;
+
+        finalPolys.Append(CPolygon(nA, nB, nC, nD)) iferr_ignore("Append poly");
+    }
+
+    mesh->ResizeObject((Int32)newPoints.GetCount(), (Int32)finalPolys.GetCount());
+    Vector* ptsW = mesh->GetPointW();
+    for (Int32 i = 0; i < (Int32)newPoints.GetCount(); ++i)
+        ptsW[i] = newPoints[i];
+
+    CPolygon* polysW = mesh->GetPolygonW();
+    for (Int32 i = 0; i < (Int32)finalPolys.GetCount(); ++i)
+        polysW[i] = finalPolys[i];
+
+    NotifyMeshUpdated(mesh);
+    return true;
+}
+
 Bool MeshBuilder::DeletePolygon(PolygonObject* mesh, Int32 polyIndex)
 {
     if (!mesh) return false;
@@ -605,6 +696,93 @@ Bool MeshBuilder::DeletePolygon(PolygonObject* mesh, Int32 polyIndex)
     }
 
     // Remap remaining polygons to the compacted point array
+    maxon::BaseArray<CPolygon> finalPolys;
+    for (Int32 i = 0; i < (Int32)remainingPolys.GetCount(); ++i)
+    {
+        const CPolygon& p = remainingPolys[i];
+        Bool isTri = (p.c == p.d);
+
+        Int32 nA = (p.a >= 0 && p.a < ptCount) ? oldToNew[p.a] : NOTOK;
+        Int32 nB = (p.b >= 0 && p.b < ptCount) ? oldToNew[p.b] : NOTOK;
+        Int32 nC = (p.c >= 0 && p.c < ptCount) ? oldToNew[p.c] : NOTOK;
+        Int32 nD = isTri ? nC : ((p.d >= 0 && p.d < ptCount) ? oldToNew[p.d] : NOTOK);
+
+        if (nA == NOTOK || nB == NOTOK || nC == NOTOK || nD == NOTOK)
+            continue;
+
+        finalPolys.Append(CPolygon(nA, nB, nC, nD)) iferr_ignore("Append poly");
+    }
+
+    mesh->ResizeObject((Int32)newPoints.GetCount(), (Int32)finalPolys.GetCount());
+    Vector* ptsW = mesh->GetPointW();
+    for (Int32 i = 0; i < (Int32)newPoints.GetCount(); ++i)
+        ptsW[i] = newPoints[i];
+
+    CPolygon* polysW = mesh->GetPolygonW();
+    for (Int32 i = 0; i < (Int32)finalPolys.GetCount(); ++i)
+        polysW[i] = finalPolys[i];
+
+    NotifyMeshUpdated(mesh);
+    return true;
+}
+
+Bool MeshBuilder::DeletePolygons(PolygonObject* mesh, const maxon::BaseArray<Int32>& polyIndices)
+{
+    if (!mesh || polyIndices.GetCount() == 0) return false;
+    Int32 ptCount = mesh->GetPointCount();
+    Int32 polyCount = mesh->GetPolygonCount();
+    if (polyCount == 0) return false;
+
+    maxon::BaseArray<Bool> polyDeleted;
+    polyDeleted.Resize(polyCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < polyCount; ++i) polyDeleted[i] = false;
+
+    for (Int32 i = 0; i < (Int32)polyIndices.GetCount(); ++i)
+    {
+        Int32 pi = polyIndices[i];
+        if (pi >= 0 && pi < polyCount)
+            polyDeleted[pi] = true;
+    }
+
+    const CPolygon* oldPolys = mesh->GetPolygonR();
+    maxon::BaseArray<CPolygon> remainingPolys;
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        if (!polyDeleted[i])
+            remainingPolys.Append(oldPolys[i]) iferr_ignore("Append poly");
+    }
+
+    const Vector* oldPts = mesh->GetPointR();
+    maxon::BaseArray<Int32> pointUseCount;
+    pointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < (Int32)remainingPolys.GetCount(); ++i)
+    {
+        const CPolygon& p = remainingPolys[i];
+        if (p.a >= 0 && p.a < ptCount) pointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) pointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) pointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) pointUseCount[p.d]++;
+    }
+
+    maxon::BaseArray<Vector> newPoints;
+    maxon::BaseArray<Int32> oldToNew;
+    oldToNew.Resize(ptCount) iferr_ignore("Resize");
+
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        if (pointUseCount[i] > 0)
+        {
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPts[i]) iferr_ignore("Append point");
+        }
+        else
+        {
+            oldToNew[i] = NOTOK;
+        }
+    }
+
     maxon::BaseArray<CPolygon> finalPolys;
     for (Int32 i = 0; i < (Int32)remainingPolys.GetCount(); ++i)
     {
@@ -1579,6 +1757,17 @@ Bool MeshBuilder::DeleteEdge(PolygonObject* mesh, Int32 v0, Int32 v1)
     return DeleteEdgeLoop(mesh, singleEdge);
 }
 
+Bool MeshBuilder::DeleteSingleEdge(PolygonObject* mesh, Int32 v0, Int32 v1)
+{
+    if (!mesh) return false;
+    maxon::BaseArray<LoopEdge> singleEdge;
+    LoopEdge le;
+    le.v0 = v0;
+    le.v1 = v1;
+    singleEdge.Append(le) iferr_ignore("Append single edge");
+    return DeleteEdgeLoop(mesh, singleEdge);
+}
+
 static Bool PointInTriangle2D(const Vector& p, const Vector& a, const Vector& b, const Vector& c)
 {
     auto sign = [](const Vector& p1, const Vector& p2, const Vector& p3) {
@@ -1869,7 +2058,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                 if (tSnap.valid)
                 {
                     Float tZ = bd->WS(tSnap.worldPos).z;
-                    Float tol = maxon::Max(Float(3.0), Float(tZ * 0.008));
+                    Float tol = maxon::Max(Float(15.0), Float(tZ * 0.02));
                     if (sPos.z > tZ + tol || Dot(tSnap.normal, toCam) <= 0.0)
                     {
                         front = false;
@@ -1890,7 +2079,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
 
     maxon::BaseArray<CandidatePt> candidates;
 
-    const Float maxSearchRadius = 150.0;
+    const Float maxSearchRadius = 600.0;
     const Float maxRadiusSq = maxSearchRadius * maxSearchRadius;
 
     for (Int32 i = 0; i < ptCount; ++i)
@@ -2203,9 +2392,9 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                     if (edgeCrosses)
                         continue;
 
-                    Vector v01 = quadPts[1].worldPos - quadPts[0].worldPos;
-                    Vector v02 = quadPts[2].worldPos - quadPts[0].worldPos;
-                    Vector geomNormal = Cross(v01, v02).GetNormalized();
+                    Vector diag02 = quadPts[2].worldPos - quadPts[0].worldPos;
+                    Vector diag13 = quadPts[3].worldPos - quadPts[1].worldPos;
+                    Vector geomNormal = Cross(diag02, diag13).GetNormalized();
 
                     if (Dot(geomNormal, targetNormal) < 0.0)
                     {
@@ -2213,7 +2402,7 @@ QuadPreview MeshBuilder::FindPotentialQuad(BaseDraw* bd, PolygonObject* retopo, 
                         geomNormal = -geomNormal;
                     }
 
-                    if (Dot(geomNormal, targetNormal) < 0.05)
+                    if (Dot(geomNormal, targetNormal) < 0.01)
                         continue;
 
                     Float perimeter = (quadPts[1].screenPos - quadPts[0].screenPos).GetLength() +

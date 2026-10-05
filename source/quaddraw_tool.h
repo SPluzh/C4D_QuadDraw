@@ -99,8 +99,26 @@ private:
         Vector           worldPos0 = Vector(0.0);
         Vector           worldPos1 = Vector(0.0);
         maxon::BaseArray<LoopEdge> loopEdges;
+        maxon::BaseArray<Int32>    loopPolygons;
+        maxon::BaseArray<Int32>    loopVertices;
         Vector           polyPts[4];
         Bool             polyIsQuad = true;
+        Bool             isLoop = false;
+
+        void Reset()
+        {
+            type = DeleteTargetType::None;
+            index = NOTOK;
+            edgeV0 = NOTOK;
+            edgeV1 = NOTOK;
+            worldPos0 = Vector(0.0);
+            worldPos1 = Vector(0.0);
+            loopEdges.Reset();
+            loopPolygons.Reset();
+            loopVertices.Reset();
+            polyIsQuad = true;
+            isLoop = false;
+        }
     };
 
     DeleteHighlight m_deleteHighlight;

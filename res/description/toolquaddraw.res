@@ -17,6 +17,7 @@ CONTAINER toolquaddraw
                     QUADDRAW_TOOL_MOVE;
                     QUADDRAW_TOOL_KNIFE;
                     QUADDRAW_TOOL_MULTICUT;
+                    QUADDRAW_TOOL_DELETE;
                 }
             }
         }

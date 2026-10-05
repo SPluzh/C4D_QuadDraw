@@ -191,8 +191,14 @@ public:
     // Delete a vertex and any polygon that uses it
     Bool DeleteVertex(PolygonObject* mesh, Int32 ptIndex);
 
+    // Delete multiple vertices in one clean pass, removing all adjacent polygons and unused points
+    Bool DeleteVertices(PolygonObject* mesh, const maxon::BaseArray<Int32>& ptIndices);
+
     // Delete an edge and handle adjacent polygons (dissolve edge between quads or remove border polygon)
     Bool DeleteEdge(PolygonObject* mesh, Int32 v0, Int32 v1);
+
+    // Delete a single edge without expanding to loop
+    Bool DeleteSingleEdge(PolygonObject* mesh, Int32 v0, Int32 v1);
 
     // Trace an edge loop (strip of edges) starting from edge (startV0, startV1)
     EdgeLoopResult FindEdgeLoop(PolygonObject* mesh, Int32 startV0, Int32 startV1);
@@ -208,6 +214,9 @@ public:
 
     // Delete a polygon by index
     Bool DeletePolygon(PolygonObject* mesh, Int32 polyIndex);
+
+    // Delete multiple polygons in one clean pass, stripping unreferenced points
+    Bool DeletePolygons(PolygonObject* mesh, const maxon::BaseArray<Int32>& polyIndices);
 
     // Find nearest front-facing polygon under screen point, optionally checking target occlusion
     Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr, Float* outAvgZ = nullptr, const SnapResult* precomputedTargetSnap = nullptr);

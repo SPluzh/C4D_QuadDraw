@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 6. **Tool Modes (Tool Switching in Settings)**:
    - **Active Tool** dropdown in the tool's settings allows switching between:
      - **Extrude**: Standard retopology mode for placing points, creating quads, extruding border edges, and tweaking components.
-     - **Move / Tweak**: Dedicated transform and move mode for tweaking vertices, edges, border edges (without triggering extrusion), polygons, and component loops with real-time surface snapping and auto-welding (prevents accidental point placement).
+     - **Move / Tweak**: Dedicated transform and move mode for tweaking vertices, edges, border edges (without triggering extrusion), polygons, and component loops with real-time surface snapping and auto-welding (creates points on empty surface click just like Extrude).
      - **Knife (Cut Loops)**: Dedicated knife tool mode. Hovering over geometry previews edge loop cuts, and **LMB Drag** inserts and slides edge loops directly without needing modifier keys.
      - **Multi-Cut**: Autodesk Maya-style Multi-Cut tool. Point-to-point polygon cutting and screen slice cutting:
        - **Point-to-Point Cut**: **LMB Click** snaps cut points onto edges (slides with hover) or vertices. Chains cut points across quads and triangles.
@@ -44,6 +44,9 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
        - **Undo Point**: Press **Backspace** or **Delete** to step back and remove the last placed point.
        - **Slice Cut**: **LMB Drag** across the mesh/screen draws a slice line that cuts through all intersected faces.
        - **Edge Loops with Ctrl**: Holding **Ctrl** in Multi-Cut mode previews and inserts edge loops (identical to Maya Multi-Cut).
+      - **Delete**: Dedicated component deletion tool:
+        - **LMB Click**: Deletes single hovered vertex, edge, or polygon.
+        - **Ctrl + LMB Click**: Deletes the entire component chain/loop (Edge Loop, Polygon Loop, or Vertex Loop).
 
 7. **Component Loop Highlighting, Drag Extrusion & Moving (Ctrl)**:
    - **Ctrl + Hover**: Hovering over any component highlights its complete loop:
@@ -56,8 +59,7 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
      - **Interior Edge Loop / Polygon Loop / Vertex Loop**: Interactively translates/tweaks all vertices of the loop across the reference surface in real-time.
 
 8. **Interactive Component Deletion**:
-   - **Ctrl + Shift + Hover**: highlights vertices, edge loops, or polygons in red.
-   - **Ctrl + Shift + LMB**: removes the highlighted component.
+   - **Dedicated Delete Tool**: Switch to **Delete** mode in settings. Hover over any vertex, edge, or polygon to highlight it in red and click **LMB** to delete it. Hold **Ctrl** (**Ctrl + LMB**) to delete the entire chain/loop (Edge Loop, Polygon Loop, or Vertex Loop).
 
 9. **Tweak Mode**:
    - **LMB Drag** on vertices, edges, or polygons moves components directly.
