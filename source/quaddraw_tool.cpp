@@ -1793,6 +1793,11 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
     lastPts.Resize(numUnique) iferr_ignore("Resize");
     lastNorms.Resize(numUnique) iferr_ignore("Resize");
 
+    Vector loopCenter(0.0);
+    for (Int32 k = 0; k < numUnique; ++k)
+        loopCenter += initPts[k];
+    loopCenter *= (1.0 / (Float)numUnique);
+
     maxon::BaseArray<Vector> initNorms;
     initNorms.Resize(numUnique) iferr_ignore("Resize");
 
@@ -1818,32 +1823,28 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
             }
         }
         if (vNorm.GetSquaredLength() > 1e-6)
-            initNorms[k] = vNorm.GetNormalized();
+            vNorm = vNorm.GetNormalized();
         else
-            initNorms[k] = Vector(0.0, 1.0, 0.0);
+            vNorm = Vector(0.0, 1.0, 0.0);
 
-        if (target)
+        // Ensure normal points outward from the loop center (essential for cylindrical/tube surfaces)
+        Vector outDir = initPts[k] - loopCenter;
+        Float outLenSq = outDir.GetSquaredLength();
+        if (outLenSq > 1e-4)
         {
-            SnapResult tSnap = m_snapper.ProjectPointAlongNormal(target, initPts[k], initNorms[k], 100.0);
-            if (tSnap.valid)
-                initNorms[k] = tSnap.normal;
+            Vector outNorm = outDir / std::sqrt(outLenSq);
+            if (Dot(vNorm, outNorm) < -0.2)
+                vNorm = -vNorm;
         }
-        lastNorms[k] = initNorms[k];
+
+        initNorms[k] = vNorm;
+        lastNorms[k] = vNorm;
     }
 
-    Int32 pivotIdx = 0;
-    Float minPivotDistSq = 1e30;
-    for (Int32 k = 0; k < numUnique; ++k)
-    {
-        Float px = sPts[k].x - mx;
-        Float py = sPts[k].y - my;
-        Float dSq = px * px + py * py;
-        if (dSq < minPivotDistSq)
-        {
-            minPivotDistSq = dSq;
-            pivotIdx = k;
-        }
-    }
+    Vector camRefStart = bd->SW_Reference(mx, my, loopCenter);
+    SnapResult mouseStartHit;
+    if (target)
+        mouseStartHit = m_snapper.RaycastSurface(bd, target, mx, my);
 
     BaseContainer device;
     win->MouseDragStart(dragButton, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
@@ -1929,29 +1930,38 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         Int32 curPtCount = retopo->GetPointCount();
         Bool hasWeldTarget = false;
 
-        // Compute 3D translation vector for the entire loop based on the active pivot
-        Float currPivotSx = sPts[pivotIdx].x + totalDx;
-        Float currPivotSy = sPts[pivotIdx].y + totalDy;
+        // Compute 3D translation vector for the entire loop based on mouse motion
+        Float curMx = mx + totalDx;
+        Float curMy = my + totalDy;
 
-        Vector delta3D(0.0);
-        Bool hasPivotHit = false;
-        Vector pivotHitPos(0.0);
+        Vector camRefCur = bd->SW_Reference(curMx, curMy, loopCenter);
+        Vector camDelta = camRefCur - camRefStart;
+        Vector delta3D = camDelta;
 
         if (target)
         {
-            SnapResult pivotHit = m_snapper.RaycastSurface(bd, target, currPivotSx, currPivotSy);
-            if (pivotHit.valid)
+            SnapResult mouseCurHit = m_snapper.RaycastSurface(bd, target, curMx, curMy);
+            if (mouseStartHit.valid && mouseCurHit.valid)
             {
-                pivotHitPos = pivotHit.worldPos;
-                hasPivotHit = true;
-                delta3D = pivotHitPos - initPts[pivotIdx];
+                Vector hitDelta = mouseCurHit.worldPos - mouseStartHit.worldPos;
+                Float hitDeltaLen = hitDelta.GetLength();
+                Float camDeltaLen = camDelta.GetLength();
+                // Sanity check: hit delta must not jump wildly into background or across model
+                if (hitDeltaLen <= camDeltaLen * 3.0 + 35.0)
+                {
+                    delta3D = hitDelta;
+                }
             }
-        }
-
-        if (!hasPivotHit && bd)
-        {
-            Vector candPivot = bd->SW_Reference(currPivotSx, currPivotSy, initPts[pivotIdx]);
-            delta3D = candPivot - initPts[pivotIdx];
+            else if (mouseCurHit.valid)
+            {
+                Vector directDelta = mouseCurHit.worldPos - camRefStart;
+                Float directLen = directDelta.GetLength();
+                Float camDeltaLen = camDelta.GetLength();
+                if (directLen <= camDeltaLen * 3.0 + 35.0)
+                {
+                    delta3D = directDelta;
+                }
+            }
         }
 
         for (Int32 k = 0; k < numUnique; ++k)
@@ -1962,14 +1972,10 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
             Vector candidatePos = initPts[k] + delta3D;
             Vector newPos = candidatePos;
 
-            if (k == pivotIdx && hasPivotHit)
+            if (target)
             {
-                newPos = pivotHitPos;
-            }
-            else if (target)
-            {
-                // Local projection along normal: preserves 3D pipe/cylindrical shape, prevents jumping across volume
-                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 200.0);
+                // Local, safe projection strictly along outward normal within local range
+                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 35.0);
                 if (snap.valid)
                 {
                     newPos = snap.worldPos;
@@ -1977,7 +1983,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
                 }
                 else
                 {
-                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 500.0);
+                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 70.0);
                     if (snap2.valid)
                     {
                         newPos = snap2.worldPos;
@@ -2242,6 +2248,11 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
     lastPts.Resize(numVerts) iferr_ignore("Resize");
     lastNorms.Resize(numVerts) iferr_ignore("Resize");
 
+    Vector loopCenter(0.0);
+    for (Int32 k = 0; k < numVerts; ++k)
+        loopCenter += initPts[k];
+    loopCenter *= (1.0 / (Float)numVerts);
+
     maxon::BaseArray<Vector> initNorms;
     initNorms.Resize(numVerts) iferr_ignore("Resize");
 
@@ -2267,32 +2278,28 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
             }
         }
         if (vNorm.GetSquaredLength() > 1e-6)
-            initNorms[k] = vNorm.GetNormalized();
+            vNorm = vNorm.GetNormalized();
         else
-            initNorms[k] = Vector(0.0, 1.0, 0.0);
+            vNorm = Vector(0.0, 1.0, 0.0);
 
-        if (target)
+        // Ensure normal points outward from the loop center (essential for cylindrical/tube surfaces)
+        Vector outDir = initPts[k] - loopCenter;
+        Float outLenSq = outDir.GetSquaredLength();
+        if (outLenSq > 1e-4)
         {
-            SnapResult tSnap = m_snapper.ProjectPointAlongNormal(target, initPts[k], initNorms[k], 100.0);
-            if (tSnap.valid)
-                initNorms[k] = tSnap.normal;
+            Vector outNorm = outDir / std::sqrt(outLenSq);
+            if (Dot(vNorm, outNorm) < -0.2)
+                vNorm = -vNorm;
         }
-        lastNorms[k] = initNorms[k];
+
+        initNorms[k] = vNorm;
+        lastNorms[k] = vNorm;
     }
 
-    Int32 pivotIdx = 0;
-    Float minPivotDistSq = 1e30;
-    for (Int32 k = 0; k < numVerts; ++k)
-    {
-        Float px = sPts[k].x - mx;
-        Float py = sPts[k].y - my;
-        Float dSq = px * px + py * py;
-        if (dSq < minPivotDistSq)
-        {
-            minPivotDistSq = dSq;
-            pivotIdx = k;
-        }
-    }
+    Vector camRefStart = bd->SW_Reference(mx, my, loopCenter);
+    SnapResult mouseStartHit;
+    if (target)
+        mouseStartHit = m_snapper.RaycastSurface(bd, target, mx, my);
 
     BaseContainer device;
     win->MouseDragStart(dragButton, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
@@ -2327,29 +2334,38 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         Matrix invMg = ~retopo->GetMg();
         Bool hasWeldTarget = false;
 
-        // Compute 3D translation vector for the entire loop based on the active pivot
-        Float currPivotSx = sPts[pivotIdx].x + totalDx;
-        Float currPivotSy = sPts[pivotIdx].y + totalDy;
+        // Compute 3D translation vector for the entire loop based on mouse motion
+        Float curMx = mx + totalDx;
+        Float curMy = my + totalDy;
 
-        Vector delta3D(0.0);
-        Bool hasPivotHit = false;
-        Vector pivotHitPos(0.0);
+        Vector camRefCur = bd->SW_Reference(curMx, curMy, loopCenter);
+        Vector camDelta = camRefCur - camRefStart;
+        Vector delta3D = camDelta;
 
         if (target)
         {
-            SnapResult pivotHit = m_snapper.RaycastSurface(bd, target, currPivotSx, currPivotSy);
-            if (pivotHit.valid)
+            SnapResult mouseCurHit = m_snapper.RaycastSurface(bd, target, curMx, curMy);
+            if (mouseStartHit.valid && mouseCurHit.valid)
             {
-                pivotHitPos = pivotHit.worldPos;
-                hasPivotHit = true;
-                delta3D = pivotHitPos - initPts[pivotIdx];
+                Vector hitDelta = mouseCurHit.worldPos - mouseStartHit.worldPos;
+                Float hitDeltaLen = hitDelta.GetLength();
+                Float camDeltaLen = camDelta.GetLength();
+                // Sanity check: hit delta must not jump wildly into background or across model
+                if (hitDeltaLen <= camDeltaLen * 3.0 + 35.0)
+                {
+                    delta3D = hitDelta;
+                }
             }
-        }
-
-        if (!hasPivotHit && bd)
-        {
-            Vector candPivot = bd->SW_Reference(currPivotSx, currPivotSy, initPts[pivotIdx]);
-            delta3D = candPivot - initPts[pivotIdx];
+            else if (mouseCurHit.valid)
+            {
+                Vector directDelta = mouseCurHit.worldPos - camRefStart;
+                Float directLen = directDelta.GetLength();
+                Float camDeltaLen = camDelta.GetLength();
+                if (directLen <= camDeltaLen * 3.0 + 35.0)
+                {
+                    delta3D = directDelta;
+                }
+            }
         }
 
         for (Int32 k = 0; k < numVerts; ++k)
@@ -2360,13 +2376,10 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
             Vector candidatePos = initPts[k] + delta3D;
             Vector newPos = candidatePos;
 
-            if (k == pivotIdx && hasPivotHit)
+            if (target)
             {
-                newPos = pivotHitPos;
-            }
-            else if (target)
-            {
-                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 200.0);
+                // Local, safe projection strictly along outward normal within local range
+                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 35.0);
                 if (snap.valid)
                 {
                     newPos = snap.worldPos;
@@ -2374,7 +2387,7 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
                 }
                 else
                 {
-                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 500.0);
+                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, initNorms[k], 70.0);
                     if (snap2.valid)
                     {
                         newPos = snap2.worldPos;
