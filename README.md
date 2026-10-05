@@ -45,8 +45,9 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
        - **Slice Cut**: **LMB Drag** across the mesh/screen draws a slice line that cuts through all intersected faces.
        - **Edge Loops with Ctrl**: Holding **Ctrl** in Multi-Cut mode previews and inserts edge loops (identical to Maya Multi-Cut).
       - **Delete**: Dedicated component deletion tool:
-        - **LMB Click**: Deletes single hovered vertex, edge, or polygon.
+        - **LMB Click**: Deletes single hovered vertex (including free unconnected dots), edge, or polygon. Deleting an unconnected point removes only that specific point and preserves all other unconnected points.
         - **Ctrl + LMB Click**: Deletes the entire component chain/loop (Edge Loop, Polygon Loop, or Vertex Loop).
+      - **Delete All Unconnected Points Button**: A dedicated button in the **Tool Mode** settings to instantly clean up all isolated/free dots that are not connected to any polygon.
 
 7. **Component Loop Highlighting, Drag Extrusion & Moving (Ctrl)**:
    - **Ctrl + Hover**: Hovering over any component highlights its complete loop:

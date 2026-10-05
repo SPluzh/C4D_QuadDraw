@@ -174,6 +174,8 @@ private:
         Int32     polyPts[4] = { NOTOK, NOTOK, NOTOK, NOTOK };
         Vector    polyWorld[4];
         Bool      polyIsQuad = true;
+
+        void Reset() { *this = TweakHover(); }
     };
 
     TweakHover    m_hoverTweak;

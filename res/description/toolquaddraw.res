@@ -20,6 +20,8 @@ CONTAINER toolquaddraw
                     QUADDRAW_TOOL_DELETE;
                 }
             }
+
+            BUTTON QUADDRAW_DELETE_UNCONNECTED { }
         }
 
         GROUP QUADDRAW_GROUP_INTERACTIVE

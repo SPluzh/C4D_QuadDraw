@@ -492,6 +492,19 @@ Bool MeshBuilder::DeleteVertex(PolygonObject* mesh, Int32 ptIndex)
         remainingPolys.Append(p) iferr_ignore("Append poly");
     }
 
+    maxon::BaseArray<Int32> oldPointUseCount;
+    oldPointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) oldPointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (p.a >= 0 && p.a < ptCount) oldPointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) oldPointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) oldPointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) oldPointUseCount[p.d]++;
+    }
+
     maxon::BaseArray<Int32> pointUseCount;
     pointUseCount.Resize(ptCount) iferr_ignore("Resize");
     for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
@@ -514,6 +527,12 @@ Bool MeshBuilder::DeleteVertex(PolygonObject* mesh, Int32 ptIndex)
         if (i == ptIndex)
         {
             oldToNew[i] = NOTOK;
+        }
+        else if (oldPointUseCount[i] == 0)
+        {
+            // Point was unconnected before this deletion: ALWAYS preserve it!
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPoints[i]) iferr_ignore("Append point");
         }
         else if (pointUseCount[i] > 0)
         {
@@ -587,6 +606,19 @@ Bool MeshBuilder::DeleteVertices(PolygonObject* mesh, const maxon::BaseArray<Int
         remainingPolys.Append(p) iferr_ignore("Append poly");
     }
 
+    maxon::BaseArray<Int32> oldPointUseCount;
+    oldPointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) oldPointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (p.a >= 0 && p.a < ptCount) oldPointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) oldPointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) oldPointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) oldPointUseCount[p.d]++;
+    }
+
     maxon::BaseArray<Int32> pointUseCount;
     pointUseCount.Resize(ptCount) iferr_ignore("Resize");
     for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
@@ -606,7 +638,17 @@ Bool MeshBuilder::DeleteVertices(PolygonObject* mesh, const maxon::BaseArray<Int
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
-        if (!vertDeleted[i] && pointUseCount[i] > 0)
+        if (vertDeleted[i])
+        {
+            oldToNew[i] = NOTOK;
+        }
+        else if (oldPointUseCount[i] == 0)
+        {
+            // Point was unconnected before this deletion: ALWAYS preserve it!
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPoints[i]) iferr_ignore("Append point");
+        }
+        else if (pointUseCount[i] > 0)
         {
             oldToNew[i] = (Int32)newPoints.GetCount();
             newPoints.Append(oldPoints[i]) iferr_ignore("Append point");
@@ -662,8 +704,22 @@ Bool MeshBuilder::DeletePolygon(PolygonObject* mesh, Int32 polyIndex)
             remainingPolys.Append(oldPolys[i]) iferr_ignore("Append poly");
     }
 
-    // Count usage of each point in the remaining polygons
+    // Count usage of each point in the old polygons
     const Vector* oldPts = mesh->GetPointR();
+    maxon::BaseArray<Int32> oldPointUseCount;
+    oldPointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) oldPointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (p.a >= 0 && p.a < ptCount) oldPointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) oldPointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) oldPointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) oldPointUseCount[p.d]++;
+    }
+
+    // Count usage of each point in the remaining polygons
     maxon::BaseArray<Int32> pointUseCount;
     pointUseCount.Resize(ptCount) iferr_ignore("Resize");
     for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
@@ -677,14 +733,19 @@ Bool MeshBuilder::DeletePolygon(PolygonObject* mesh, Int32 polyIndex)
         if (p.c != p.d && p.d >= 0 && p.d < ptCount) pointUseCount[p.d]++;
     }
 
-    // Strip points that have 0 remaining references so no hanging vertices remain
     maxon::BaseArray<Vector> newPoints;
     maxon::BaseArray<Int32> oldToNew;
     oldToNew.Resize(ptCount) iferr_ignore("Resize");
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
-        if (pointUseCount[i] > 0)
+        if (oldPointUseCount[i] == 0)
+        {
+            // Point was unconnected before this deletion: ALWAYS preserve it!
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPts[i]) iferr_ignore("Append point");
+        }
+        else if (pointUseCount[i] > 0)
         {
             oldToNew[i] = (Int32)newPoints.GetCount();
             newPoints.Append(oldPts[i]) iferr_ignore("Append point");
@@ -753,6 +814,19 @@ Bool MeshBuilder::DeletePolygons(PolygonObject* mesh, const maxon::BaseArray<Int
     }
 
     const Vector* oldPts = mesh->GetPointR();
+    maxon::BaseArray<Int32> oldPointUseCount;
+    oldPointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) oldPointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (p.a >= 0 && p.a < ptCount) oldPointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) oldPointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) oldPointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) oldPointUseCount[p.d]++;
+    }
+
     maxon::BaseArray<Int32> pointUseCount;
     pointUseCount.Resize(ptCount) iferr_ignore("Resize");
     for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
@@ -772,7 +846,13 @@ Bool MeshBuilder::DeletePolygons(PolygonObject* mesh, const maxon::BaseArray<Int
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
-        if (pointUseCount[i] > 0)
+        if (oldPointUseCount[i] == 0)
+        {
+            // Point was unconnected before this deletion: ALWAYS preserve it!
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPts[i]) iferr_ignore("Append point");
+        }
+        else if (pointUseCount[i] > 0)
         {
             oldToNew[i] = (Int32)newPoints.GetCount();
             newPoints.Append(oldPts[i]) iferr_ignore("Append point");
@@ -811,6 +891,84 @@ Bool MeshBuilder::DeletePolygons(PolygonObject* mesh, const maxon::BaseArray<Int
 
     NotifyMeshUpdated(mesh);
     return true;
+}
+
+Int32 MeshBuilder::DeleteAllUnconnectedPoints(PolygonObject* mesh)
+{
+    if (!mesh) return 0;
+    Int32 ptCount = mesh->GetPointCount();
+    Int32 polyCount = mesh->GetPolygonCount();
+    if (ptCount == 0) return 0;
+
+    if (polyCount == 0)
+    {
+        Int32 deletedCount = ptCount;
+        mesh->ResizeObject(0, 0);
+        NotifyMeshUpdated(mesh);
+        return deletedCount;
+    }
+
+    const CPolygon* polys = mesh->GetPolygonR();
+    maxon::BaseArray<Int32> pointUseCount;
+    pointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = polys[i];
+        if (p.a >= 0 && p.a < ptCount) pointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) pointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) pointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) pointUseCount[p.d]++;
+    }
+
+    const Vector* oldPts = mesh->GetPointR();
+    maxon::BaseArray<Vector> newPoints;
+    maxon::BaseArray<Int32> oldToNew;
+    oldToNew.Resize(ptCount) iferr_ignore("Resize");
+
+    Int32 deletedCount = 0;
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        if (pointUseCount[i] > 0)
+        {
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(oldPts[i]) iferr_ignore("Append point");
+        }
+        else
+        {
+            oldToNew[i] = NOTOK;
+            deletedCount++;
+        }
+    }
+
+    if (deletedCount == 0)
+        return 0;
+
+    maxon::BaseArray<CPolygon> finalPolys;
+    finalPolys.Resize(polyCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = polys[i];
+        Bool isTri = (p.c == p.d);
+        Int32 nA = (p.a >= 0 && p.a < ptCount) ? oldToNew[p.a] : NOTOK;
+        Int32 nB = (p.b >= 0 && p.b < ptCount) ? oldToNew[p.b] : NOTOK;
+        Int32 nC = (p.c >= 0 && p.c < ptCount) ? oldToNew[p.c] : NOTOK;
+        Int32 nD = isTri ? nC : ((p.d >= 0 && p.d < ptCount) ? oldToNew[p.d] : NOTOK);
+        finalPolys[i] = CPolygon(nA, nB, nC, nD);
+    }
+
+    mesh->ResizeObject((Int32)newPoints.GetCount(), polyCount);
+    Vector* ptsW = mesh->GetPointW();
+    for (Int32 i = 0; i < (Int32)newPoints.GetCount(); ++i)
+        ptsW[i] = newPoints[i];
+
+    CPolygon* polysW = mesh->GetPolygonW();
+    for (Int32 i = 0; i < polyCount; ++i)
+        polysW[i] = finalPolys[i];
+
+    NotifyMeshUpdated(mesh);
+    return deletedCount;
 }
 
 
@@ -1663,6 +1821,19 @@ Bool MeshBuilder::DeleteEdgeLoop(PolygonObject* mesh, const maxon::BaseArray<Loo
     }
 
     // Strip unreferenced points
+    maxon::BaseArray<Int32> oldPointUseCount;
+    oldPointUseCount.Resize(ptCount) iferr_ignore("Resize");
+    for (Int32 i = 0; i < ptCount; ++i) oldPointUseCount[i] = 0;
+
+    for (Int32 i = 0; i < polyCount; ++i)
+    {
+        const CPolygon& p = oldPolys[i];
+        if (p.a >= 0 && p.a < ptCount) oldPointUseCount[p.a]++;
+        if (p.b >= 0 && p.b < ptCount) oldPointUseCount[p.b]++;
+        if (p.c >= 0 && p.c < ptCount) oldPointUseCount[p.c]++;
+        if (p.c != p.d && p.d >= 0 && p.d < ptCount) oldPointUseCount[p.d]++;
+    }
+
     maxon::BaseArray<Int32> pointUseCount;
     pointUseCount.Resize(ptCount) iferr_ignore("Resize");
     for (Int32 i = 0; i < ptCount; ++i) pointUseCount[i] = 0;
@@ -1682,7 +1853,13 @@ Bool MeshBuilder::DeleteEdgeLoop(PolygonObject* mesh, const maxon::BaseArray<Loo
 
     for (Int32 i = 0; i < ptCount; ++i)
     {
-        if (pointUseCount[i] > 0)
+        if (oldPointUseCount[i] == 0)
+        {
+            // Point was unconnected before this deletion: ALWAYS preserve it!
+            oldToNew[i] = (Int32)newPoints.GetCount();
+            newPoints.Append(pts[i]) iferr_ignore("Append point");
+        }
+        else if (pointUseCount[i] > 0)
         {
             oldToNew[i] = (Int32)newPoints.GetCount();
             newPoints.Append(pts[i]) iferr_ignore("Append point");

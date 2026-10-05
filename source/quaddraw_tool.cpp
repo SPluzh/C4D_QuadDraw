@@ -30,6 +30,7 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
     m_cachedCutT = -1.0;
     m_cachedCutPoly = NOTOK;
     m_deleteHighlight.type = DeleteTargetType::None;
+    m_hoverSnap.valid = false;
     m_hoverTweak.mode = TweakMode::None;
     m_activeDragMode = TweakMode::None;
     m_dragVertexIdx = NOTOK;
@@ -152,6 +153,7 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
     m_shiftQuadPreview.valid = false;
     m_edgeCutPreview.valid = false;
     m_deleteHighlight.type = DeleteTargetType::None;
+    m_hoverSnap.valid = false;
     m_componentLoop.Reset();
     m_hoverTweak.mode = TweakMode::None;
     m_activeDragMode = TweakMode::None;
@@ -219,6 +221,12 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
     {
         case MSG_DESCRIPTION_CHECKUPDATE:
         {
+            m_hoverSnap.valid = false;
+            m_hoverTweak.Reset();
+            m_deleteHighlight.Reset();
+            m_componentLoop.Reset();
+            m_shiftQuadPreview.valid = false;
+            m_edgeCutPreview.valid = false;
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
         }
@@ -226,11 +234,34 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
         case MSG_DESCRIPTION_COMMAND:
         {
             DescriptionCommand* dc = (DescriptionCommand*)t_data;
-            if (dc && dc->_descId[0].id == MDATA_DEFAULTVALUES)
+            if (dc)
             {
-                InitDefaultSettings(doc, data);
-                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
-                return true;
+                if (dc->_descId[0].id == MDATA_DEFAULTVALUES)
+                {
+                    InitDefaultSettings(doc, data);
+                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    return true;
+                }
+                else if (dc->_descId[0].id == QUADDRAW_DELETE_UNCONNECTED)
+                {
+                    PolygonObject* retopo = GetEditableMesh(doc, false);
+                    if (retopo)
+                    {
+                        doc->StartUndo();
+                        doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                        Int32 count = m_builder.DeleteAllUnconnectedPoints(retopo);
+                        m_deleteHighlight.Reset();
+                        m_shiftQuadPreview.valid = false;
+                        doc->EndUndo();
+                        EventAdd();
+                        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                        if (count > 0)
+                            StatusSetText(FormatString("QuadDraw: Deleted @ unconnected point(s)"_s, count));
+                        else
+                            StatusSetText("QuadDraw: No unconnected points found"_s);
+                    }
+                    return true;
+                }
             }
             break;
         }
@@ -480,7 +511,11 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     Bool isDeleteMode = (activeTool == QUADDRAW_TOOL_DELETE);
     if (isDeleteMode)
     {
+        m_hoverSnap.valid = false;
+        m_hoverTweak.Reset();
+        m_componentLoop.Reset();
         m_shiftQuadPreview.valid = false;
+        m_edgeCutPreview.valid = false;
         m_deleteHighlight.Reset();
 
         Bool deleteChain = m_ctrlHeld;
@@ -811,6 +846,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     // =========================================================================
     if (activeTool == QUADDRAW_TOOL_MULTICUT)
     {
+        m_hoverSnap.valid = false;
         m_shiftQuadPreview.valid = false;
         m_hoverTweak.mode = TweakMode::None;
         m_componentLoop.Reset();
@@ -1034,6 +1070,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     // =========================================================================
     if (activeTool == QUADDRAW_TOOL_KNIFE)
     {
+        m_hoverSnap.valid = false;
         m_shiftQuadPreview.valid = false;
         m_hoverTweak.mode = TweakMode::None;
 
@@ -5096,8 +5133,9 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         }
     }
 
-    // 8. Draw snap cursor indicator on surface (when placing dots)
-    if (!m_shiftHeld && !m_ctrlHeld && m_activeDragMode == TweakMode::None && m_hoverTweak.mode == TweakMode::None && m_hoverSnap.valid)
+    // 8. Draw snap cursor indicator on surface (when placing dots in Extrude / Move mode)
+    if (!m_shiftHeld && !m_ctrlHeld && m_activeDragMode == TweakMode::None && m_hoverTweak.mode == TweakMode::None && m_hoverSnap.valid &&
+        (activeTool == QUADDRAW_TOOL_QUAD || activeTool == QUADDRAW_TOOL_MOVE))
     {
         drawPoint(m_hoverSnap.worldPos, wireColor, pointSize, disableXRay);
     }

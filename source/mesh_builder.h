@@ -218,6 +218,9 @@ public:
     // Delete multiple polygons in one clean pass, stripping unreferenced points
     Bool DeletePolygons(PolygonObject* mesh, const maxon::BaseArray<Int32>& polyIndices);
 
+    // Delete all unconnected (isolated) points that are not referenced by any polygon
+    Int32 DeleteAllUnconnectedPoints(PolygonObject* mesh);
+
     // Find nearest front-facing polygon under screen point, optionally checking target occlusion
     Int32 FindPolygonUnderScreen(BaseDraw* bd, PolygonObject* mesh, Float screenX, Float screenY, PolygonObject* targetMesh = nullptr, SurfaceSnapper* snapper = nullptr, Float* outAvgZ = nullptr, const SnapResult* precomputedTargetSnap = nullptr);
 

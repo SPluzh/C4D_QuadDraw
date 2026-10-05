@@ -9,6 +9,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_KNIFE             "Knife (Cut Loops)";
     QUADDRAW_TOOL_MULTICUT          "Multi-Cut";
     QUADDRAW_TOOL_DELETE            "Delete";
+    QUADDRAW_DELETE_UNCONNECTED     "Delete All Unconnected Points";
 
     QUADDRAW_GROUP_DISPLAY          "Display Settings";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Disable Custom Mesh Shading";
