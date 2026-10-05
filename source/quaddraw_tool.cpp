@@ -164,7 +164,13 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
     m_weldTargetIdx2 = NOTOK;
     m_multiCutPoints.Reset();
     m_multiCutPreview.valid = false;
+    m_multiCutPreview.cuts.Reset();
+    m_multiCutPreview.previewSegments.Reset();
+    m_multiCutHover = MultiCutPoint();
     m_sliceDrag.active = false;
+    m_sliceDrag.result.valid = false;
+    m_sliceDrag.result.cuts.Reset();
+    m_sliceDrag.result.previewSegments.Reset();
 }
 
 Bool QuadDrawToolData::GetDDescription(const BaseDocument* doc, const BaseContainer& data, Description* description, DESCFLAGS_DESC& flags) const
@@ -595,7 +601,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     // =========================================================================
     // MODE 2: CTRL HELD ALONE (COMPONENT LOOP HIGHLIGHT - Vertex, Edge, Polygon Loop)
     // =========================================================================
-    if (m_ctrlHeld && !m_shiftHeld)
+    if (m_ctrlHeld && !m_shiftHeld && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE)
     {
         m_shiftQuadPreview.valid = false;
         m_edgeCutPreview.valid = false;
@@ -806,23 +812,41 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             else
             {
                 m_edgeCutPreview.valid = false;
+                m_edgeCutPreview.cutPoints.Reset();
+                m_edgeCutPreview.cutSegments.Reset();
+                m_edgeCutPreview.quadSplits.Reset();
+                m_edgeCutPreview.triSplits.Reset();
+                m_cachedCutV0 = NOTOK;
+                m_cachedCutV1 = NOTOK;
+                m_cachedCutT = -1.0;
+                m_cachedCutPoly = NOTOK;
             }
 
+            m_multiCutHover = MultiCutPoint();
             bc.SetInt32(RESULT_CURSOR, MOUSE_CROSS);
             if (m_edgeCutPreview.valid)
             {
                 Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
-                StatusSetText(FormatString("QuadDraw [MULTI-CUT + Ctrl] | LMB: Insert Edge Loop (@%) | Drag to Slide | Esc to Cancel"_s, pct));
+                Int32 count = (Int32)m_edgeCutPreview.quadSplits.GetCount();
+                StatusSetText(FormatString("QuadDraw [LOOP CUT (Ctrl)] | LMB: Insert Edge Loop (@% across @ quads) | Drag to Slide | Esc to Cancel"_s, pct, count));
             }
             else
             {
-                StatusSetText("QuadDraw [MULTI-CUT + Ctrl] | Hover over Edge/Quad to Insert Edge Loop"_s);
+                StatusSetText("QuadDraw [LOOP CUT (Ctrl)] | Hover over Edge/Quad to Insert Edge Loop"_s);
             }
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
         }
 
         m_edgeCutPreview.valid = false;
+        m_edgeCutPreview.cutPoints.Reset();
+        m_edgeCutPreview.cutSegments.Reset();
+        m_edgeCutPreview.quadSplits.Reset();
+        m_edgeCutPreview.triSplits.Reset();
+        m_cachedCutV0 = NOTOK;
+        m_cachedCutV1 = NOTOK;
+        m_cachedCutT = -1.0;
+        m_cachedCutPoly = NOTOK;
 
         // Normal Multi-Cut Hover: Snapping to Vertex or Edge
         m_multiCutHover.type = MultiCutSnapType::None;
@@ -924,6 +948,10 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         }
         else
         {
+            m_multiCutPreview.valid = false;
+            m_multiCutPreview.cuts.Reset();
+            m_multiCutPreview.previewSegments.Reset();
+
             if (m_multiCutHover.type == MultiCutSnapType::Edge)
             {
                 Int32 pct = (Int32)(m_multiCutHover.edgeT * 100.0 + 0.5);
@@ -944,7 +972,11 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         return true;
     }
 
-    m_multiCutHover.type = MultiCutSnapType::None;
+    m_multiCutHover = MultiCutPoint();
+    m_multiCutPoints.Reset();
+    m_multiCutPreview.valid = false;
+    m_multiCutPreview.cuts.Reset();
+    m_multiCutPreview.previewSegments.Reset();
 
     // =========================================================================
     // MODE 4B: KNIFE TOOL MODE (ACTIVE TOOL == KNIFE)
@@ -1038,6 +1070,10 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
     // Clear cut preview when not in Knife mode
     m_edgeCutPreview.valid = false;
+    m_edgeCutPreview.cutPoints.Reset();
+    m_edgeCutPreview.cutSegments.Reset();
+    m_edgeCutPreview.quadSplits.Reset();
+    m_edgeCutPreview.triSplits.Reset();
     m_cachedCutV0 = NOTOK;
     m_cachedCutV1 = NOTOK;
     m_cachedCutT = -1.0;
@@ -2304,10 +2340,26 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
 
 Bool QuadDrawToolData::CommitMultiCut(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, PolygonObject* retopo, PolygonObject* target)
 {
-    if (!retopo || m_multiCutPoints.GetCount() < 2) return false;
+    if (!retopo || m_multiCutPoints.GetCount() < 2)
+    {
+        m_multiCutPoints.Reset();
+        m_multiCutPreview.valid = false;
+        m_multiCutPreview.cuts.Reset();
+        m_multiCutPreview.previewSegments.Reset();
+        m_multiCutHover = MultiCutPoint();
+        return false;
+    }
 
     MultiCutResult cutRes = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, nullptr);
-    if (!cutRes.valid || cutRes.cuts.GetCount() == 0) return false;
+    if (!cutRes.valid || cutRes.cuts.GetCount() == 0)
+    {
+        m_multiCutPoints.Reset();
+        m_multiCutPreview.valid = false;
+        m_multiCutPreview.cuts.Reset();
+        m_multiCutPreview.previewSegments.Reset();
+        m_multiCutHover = MultiCutPoint();
+        return false;
+    }
 
     doc->StartUndo();
     doc->AddUndo(UNDOTYPE::CHANGE, retopo);
@@ -2324,6 +2376,9 @@ Bool QuadDrawToolData::CommitMultiCut(BaseDocument* doc, BaseContainer& data, Ba
 
     m_multiCutPoints.Reset();
     m_multiCutPreview.valid = false;
+    m_multiCutPreview.cuts.Reset();
+    m_multiCutPreview.previewSegments.Reset();
+    m_multiCutHover = MultiCutPoint();
     return success;
 }
 
@@ -2350,13 +2405,19 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 CommitMultiCut(doc, data, bd, retopo, target);
                 m_multiCutPoints.Reset();
                 m_multiCutPreview.valid = false;
+                m_multiCutPreview.cuts.Reset();
+                m_multiCutPreview.previewSegments.Reset();
+                m_multiCutHover = MultiCutPoint();
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
-            else if (m_multiCutPoints.GetCount() == 1)
+            else if (m_multiCutPoints.GetCount() >= 1)
             {
                 m_multiCutPoints.Reset();
                 m_multiCutPreview.valid = false;
+                m_multiCutPreview.cuts.Reset();
+                m_multiCutPreview.previewSegments.Reset();
+                m_multiCutHover = MultiCutPoint();
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
@@ -2633,7 +2694,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // ==========================================
     // ACTION 2: CTRL (alone) + LMB -> COMPONENT LOOP (SELECT / EXTRUDE / MOVE)
     // ==========================================
-    if ((qualifier & QCTRL) && !(qualifier & QSHIFT))
+    if ((qualifier & QCTRL) && !(qualifier & QSHIFT) && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE)
     {
         // If m_componentLoop was not detected yet (e.g. rapid click), detect on the spot
         if (m_componentLoop.type == ComponentLoopType::None)
@@ -2811,6 +2872,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             if (dragResult == MOUSEDRAGRESULT::ESCAPE)
             {
                 m_edgeCutPreview.valid = false;
+                m_edgeCutPreview.cutPoints.Reset();
+                m_edgeCutPreview.cutSegments.Reset();
+                m_edgeCutPreview.quadSplits.Reset();
+                m_edgeCutPreview.triSplits.Reset();
                 m_cachedCutV0 = NOTOK;
                 m_cachedCutV1 = NOTOK;
                 m_cachedCutT = -1.0;
@@ -2829,6 +2894,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 StatusSetText(FormatString("QuadDraw [KNIFE]: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
             }
             m_edgeCutPreview.valid = false;
+            m_edgeCutPreview.cutPoints.Reset();
+            m_edgeCutPreview.cutSegments.Reset();
+            m_edgeCutPreview.quadSplits.Reset();
+            m_edgeCutPreview.triSplits.Reset();
             m_cachedCutV0 = NOTOK;
             m_cachedCutV1 = NOTOK;
             m_cachedCutT = -1.0;
@@ -2851,9 +2920,46 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // ==========================================
     if (activeTool == QUADDRAW_TOOL_MULTICUT)
     {
-        if (m_ctrlHeld)
+        if (m_ctrlHeld || ((qualifier & QCTRL) != 0))
         {
-            // Maya Multi-Cut + Ctrl: Insert Edge Loop
+            // Maya Multi-Cut + Ctrl: Insert Edge Loop (Loop Cut)
+            if (!m_edgeCutPreview.valid)
+            {
+                Int32 hitV0 = NOTOK, hitV1 = NOTOK;
+                Float hitT = 0.5;
+                Int32 hitPoly = NOTOK;
+
+                Int32 nearPoly = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper);
+                if (nearPoly != NOTOK)
+                {
+                    EdgeHit polyEdge = m_builder.FindClosestEdgeOfPolygon(bd, retopo, nearPoly, mx, my);
+                    if (polyEdge.valid)
+                    {
+                        hitV0 = polyEdge.v0;
+                        hitV1 = polyEdge.v1;
+                        hitT  = polyEdge.t;
+                        hitPoly = nearPoly;
+                    }
+                }
+                else
+                {
+                    EdgeHit edgeHit = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 12.0, target);
+                    if (edgeHit.valid)
+                    {
+                        hitV0 = edgeHit.v0;
+                        hitV1 = edgeHit.v1;
+                        hitT  = edgeHit.t;
+                        hitPoly = edgeHit.polyIndex;
+                    }
+                }
+
+                if (hitV0 != NOTOK && hitV1 != NOTOK)
+                {
+                    if (std::abs(hitT - 0.5) < 0.05) hitT = 0.5;
+                    m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, hitV0, hitV1, hitT, hitPoly);
+                }
+            }
+
             if (m_edgeCutPreview.valid)
             {
                 BaseContainer device;
@@ -2874,7 +2980,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                         {
                             m_edgeCutPreview = m_builder.FindEdgeLoopCut(retopo, target, m_snapper, bd, m_edgeCutPreview.primaryV0, m_edgeCutPreview.primaryV1, newT, m_edgeCutPreview.primaryPoly);
                             Int32 pct = (Int32)(m_edgeCutPreview.paramT * 100.0 + 0.5);
-                            StatusSetText(FormatString("QuadDraw [MULTI-CUT + Ctrl] | Sliding Edge Loop (@%)"_s, pct));
+                            StatusSetText(FormatString("QuadDraw [LOOP CUT (Ctrl)] | Sliding Edge Loop (@%)"_s, pct));
                             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                         }
                     }
@@ -2884,6 +2990,16 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 if (dragResult == MOUSEDRAGRESULT::ESCAPE)
                 {
                     m_edgeCutPreview.valid = false;
+                    m_edgeCutPreview.cutPoints.Reset();
+                    m_edgeCutPreview.cutSegments.Reset();
+                    m_edgeCutPreview.quadSplits.Reset();
+                    m_edgeCutPreview.triSplits.Reset();
+                    m_cachedCutV0 = NOTOK;
+                    m_cachedCutV1 = NOTOK;
+                    m_cachedCutT = -1.0;
+                    m_cachedCutPoly = NOTOK;
+                    m_multiCutHover = MultiCutPoint();
+                    StatusSetText("QuadDraw [LOOP CUT (Ctrl)]: Cut canceled."_s);
                     DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                     return true;
                 }
@@ -2893,9 +3009,18 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 Int32 quadsSplit = (Int32)m_edgeCutPreview.quadSplits.GetCount();
                 if (m_builder.ApplyEdgeLoopCut(retopo, m_edgeCutPreview))
                 {
-                    StatusSetText(FormatString("QuadDraw [MULTI-CUT]: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
+                    StatusSetText(FormatString("QuadDraw [LOOP CUT (Ctrl)]: Inserted Edge Loop (@ quads split)"_s, quadsSplit));
                 }
                 m_edgeCutPreview.valid = false;
+                m_edgeCutPreview.cutPoints.Reset();
+                m_edgeCutPreview.cutSegments.Reset();
+                m_edgeCutPreview.quadSplits.Reset();
+                m_edgeCutPreview.triSplits.Reset();
+                m_cachedCutV0 = NOTOK;
+                m_cachedCutV1 = NOTOK;
+                m_cachedCutT = -1.0;
+                m_cachedCutPoly = NOTOK;
+                m_multiCutHover = MultiCutPoint();
                 doc->EndUndo();
                 EventAdd();
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -2915,6 +3040,11 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             if (m_multiCutPoints.GetCount() >= 2)
             {
                 CommitMultiCut(doc, data, bd, retopo, target);
+                m_multiCutPoints.Reset();
+                m_multiCutPreview.valid = false;
+                m_multiCutPreview.cuts.Reset();
+                m_multiCutPreview.previewSegments.Reset();
+                m_multiCutHover = MultiCutPoint();
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
@@ -2954,8 +3084,14 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         if (dragResult == MOUSEDRAGRESULT::ESCAPE)
         {
             m_sliceDrag.active = false;
+            m_sliceDrag.result.valid = false;
+            m_sliceDrag.result.cuts.Reset();
+            m_sliceDrag.result.previewSegments.Reset();
             m_multiCutPoints.Reset();
             m_multiCutPreview.valid = false;
+            m_multiCutPreview.cuts.Reset();
+            m_multiCutPreview.previewSegments.Reset();
+            m_multiCutHover = MultiCutPoint();
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
         }
@@ -2976,6 +3112,13 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             }
             m_sliceDrag.active = false;
             m_sliceDrag.result.valid = false;
+            m_sliceDrag.result.cuts.Reset();
+            m_sliceDrag.result.previewSegments.Reset();
+            m_multiCutPoints.Reset();
+            m_multiCutPreview.valid = false;
+            m_multiCutPreview.cuts.Reset();
+            m_multiCutPreview.previewSegments.Reset();
+            m_multiCutHover = MultiCutPoint();
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
         }
@@ -4144,7 +4287,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
     // 3A2. Draw Multi-Cut Preview (Placed points, cut path, candidate hover, and slice drag)
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
-    if (activeTool == QUADDRAW_TOOL_MULTICUT)
+    if (activeTool == QUADDRAW_TOOL_MULTICUT && !m_ctrlHeld)
     {
         // 1. Draw Slice Drag if active
         if (m_sliceDrag.active)
@@ -4183,11 +4326,14 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 }
             }
 
-            // Draw candidate preview segments from m_multiCutPreview
-            for (Int32 k = 0; k < (Int32)m_multiCutPreview.previewSegments.GetCount(); ++k)
+            // Draw candidate preview segments from m_multiCutPreview ONLY if valid and points placed
+            if (m_multiCutPreview.valid && ptCount > 0)
             {
-                const MultiCutSliceSegment& seg = m_multiCutPreview.previewSegments[k];
-                drawThickLine(seg.p0, seg.p1, hoverLineWidth + 1.0, disableXRay, 3);
+                for (Int32 k = 0; k < (Int32)m_multiCutPreview.previewSegments.GetCount(); ++k)
+                {
+                    const MultiCutSliceSegment& seg = m_multiCutPreview.previewSegments[k];
+                    drawThickLine(seg.p0, seg.p1, hoverLineWidth + 1.0, disableXRay, 3);
+                }
             }
 
             // Draw rubberband line to hover point
@@ -4206,9 +4352,13 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 drawPoint(m_multiCutHover.worldPos, cutColor, pointSize + 2.0, disableXRay);
                 if (retopo && m_multiCutHover.edgeV0 != NOTOK && m_multiCutHover.edgeV1 != NOTOK)
                 {
-                    Vector w0 = retopo->GetMg() * retopo->GetPointR()[m_multiCutHover.edgeV0];
-                    Vector w1 = retopo->GetMg() * retopo->GetPointR()[m_multiCutHover.edgeV1];
-                    drawThickLine(w0, w1, hoverLineWidth * 0.8, disableXRay, 2);
+                    Int32 numPts = retopo->GetPointCount();
+                    if (m_multiCutHover.edgeV0 < numPts && m_multiCutHover.edgeV1 < numPts)
+                    {
+                        Vector w0 = retopo->GetMg() * retopo->GetPointR()[m_multiCutHover.edgeV0];
+                        Vector w1 = retopo->GetMg() * retopo->GetPointR()[m_multiCutHover.edgeV1];
+                        drawThickLine(w0, w1, hoverLineWidth * 0.8, disableXRay, 2);
+                    }
                 }
             }
         }
@@ -4737,11 +4887,35 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, const BaseContainer& msg)
 {
     Int32 qual = msg.GetInt32(BFM_INPUT_QUALIFIER);
+    Bool oldCtrl = m_ctrlHeld;
     m_shiftHeld = (qual & QSHIFT) != 0;
     m_ctrlHeld  = (qual & QCTRL)  != 0;
 
     Int32 key = msg.GetInt32(BFM_INPUT_CHANNEL);
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
+    if (activeTool == QUADDRAW_TOOL_MULTICUT)
+    {
+        if (oldCtrl && !m_ctrlHeld)
+        {
+            m_edgeCutPreview.valid = false;
+            m_edgeCutPreview.cutPoints.Reset();
+            m_edgeCutPreview.cutSegments.Reset();
+            m_edgeCutPreview.quadSplits.Reset();
+            m_edgeCutPreview.triSplits.Reset();
+            m_cachedCutV0 = NOTOK;
+            m_cachedCutV1 = NOTOK;
+            m_cachedCutT = -1.0;
+            m_cachedCutPoly = NOTOK;
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        }
+        else if (!oldCtrl && m_ctrlHeld)
+        {
+            m_componentLoop.Reset();
+            m_multiCutHover = MultiCutPoint();
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        }
+    }
 
     if (key == KEY_ENTER)
     {
@@ -4754,6 +4928,9 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
                 CommitMultiCut(doc, data, bd, retopo, target);
                 m_multiCutPoints.Reset();
                 m_multiCutPreview.valid = false;
+                m_multiCutPreview.cuts.Reset();
+                m_multiCutPreview.previewSegments.Reset();
+                m_multiCutHover = MultiCutPoint();
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
             }
@@ -4766,7 +4943,16 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
             m_multiCutPoints.Pop();
             PolygonObject* retopo = GetEditableMesh(doc, false);
             PolygonObject* target = GetTargetMesh(doc, retopo);
-            m_multiCutPreview = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, nullptr);
+            if (m_multiCutPoints.GetCount() > 0)
+            {
+                m_multiCutPreview = m_builder.BuildMultiCutFromPoints(bd, retopo, target, m_snapper, m_multiCutPoints, nullptr);
+            }
+            else
+            {
+                m_multiCutPreview.valid = false;
+                m_multiCutPreview.cuts.Reset();
+                m_multiCutPreview.previewSegments.Reset();
+            }
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
         }
@@ -4775,12 +4961,26 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
     {
         m_shiftQuadPreview.valid = false;
         m_edgeCutPreview.valid = false;
+        m_edgeCutPreview.cutPoints.Reset();
+        m_edgeCutPreview.cutSegments.Reset();
+        m_edgeCutPreview.quadSplits.Reset();
+        m_edgeCutPreview.triSplits.Reset();
+        m_cachedCutV0 = NOTOK;
+        m_cachedCutV1 = NOTOK;
+        m_cachedCutT = -1.0;
+        m_cachedCutPoly = NOTOK;
         m_deleteHighlight.type = DeleteTargetType::None;
         m_deleteHighlight.loopEdges.Reset();
         m_componentLoop.Reset();
         m_multiCutPoints.Reset();
         m_multiCutPreview.valid = false;
+        m_multiCutPreview.cuts.Reset();
+        m_multiCutPreview.previewSegments.Reset();
+        m_multiCutHover = MultiCutPoint();
         m_sliceDrag.active = false;
+        m_sliceDrag.result.valid = false;
+        m_sliceDrag.result.cuts.Reset();
+        m_sliceDrag.result.previewSegments.Reset();
         m_hoverTweak.mode = TweakMode::None;
         m_activeDragMode = TweakMode::None;
         m_dragVertexIdx = NOTOK;
