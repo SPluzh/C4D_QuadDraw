@@ -34,7 +34,8 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 
 6. **Tool Modes (Tool Switching in Settings)**:
    - **Active Tool** dropdown in the tool's settings allows switching between:
-     - **QuadDraw**: Standard retopology mode for placing points, creating quads, extruding border edges, and tweaking components.
+     - **Extrude**: Standard retopology mode for placing points, creating quads, extruding border edges, and tweaking components.
+     - **Move / Tweak**: Dedicated transform and move mode for tweaking vertices, edges, border edges (without triggering extrusion), polygons, and component loops with real-time surface snapping and auto-welding (prevents accidental point placement).
      - **Knife (Cut Loops)**: Dedicated knife tool mode. Hovering over geometry previews edge loop cuts, and **LMB Drag** inserts and slides edge loops directly without needing modifier keys.
      - **Multi-Cut**: Autodesk Maya-style Multi-Cut tool. Point-to-point polygon cutting and screen slice cutting:
        - **Point-to-Point Cut**: **LMB Click** snaps cut points onto edges (slides with hover) or vertices. Chains cut points across quads and triangles.

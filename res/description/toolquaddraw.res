@@ -14,6 +14,7 @@ CONTAINER toolquaddraw
                 CYCLE
                 {
                     QUADDRAW_TOOL_QUAD;
+                    QUADDRAW_TOOL_MOVE;
                     QUADDRAW_TOOL_KNIFE;
                     QUADDRAW_TOOL_MULTICUT;
                 }

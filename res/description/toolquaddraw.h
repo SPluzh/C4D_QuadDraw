@@ -6,6 +6,7 @@ enum
     QUADDRAW_GROUP_TOOL             = 2030,
     QUADDRAW_ACTIVE_TOOL            = 2031,
     QUADDRAW_TOOL_QUAD              = 0,
+    QUADDRAW_TOOL_MOVE              = 3,
     QUADDRAW_TOOL_KNIFE             = 1,
     QUADDRAW_TOOL_MULTICUT          = 2,
 

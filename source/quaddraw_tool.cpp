@@ -466,6 +466,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     String targetName = target ? target->GetName() : "None (No Snapping)"_s;
     Int32 retopoPolys = retopo ? retopo->GetPolygonCount() : 0;
     Int32 retopoPts = retopo ? retopo->GetPointCount() : 0;
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
 
     // =========================================================================
     // MODE 1: CTRL + SHIFT HELD (DELETE MODE - Maya style)
@@ -719,8 +720,8 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         Float brushRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
         Float brushStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
 
-        // Check quad creation preview only if retopo has at least 4 vertices
-        if (retopo && retopo->GetPointCount() >= 4)
+        // Check quad creation preview only if retopo has at least 4 vertices and not in Move mode
+        if (activeTool != QUADDRAW_TOOL_MOVE && retopo && retopo->GetPointCount() >= 4)
         {
             Vector viewNormal = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
             m_shiftQuadPreview = m_builder.FindPotentialQuad(bd, retopo, viewNormal, x, y, target, &m_snapper);
@@ -751,7 +752,6 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     // =========================================================================
     // MODE 4A: MULTI-CUT TOOL MODE (ACTIVE TOOL == MULTI-CUT - Maya Multi-Cut)
     // =========================================================================
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
     if (activeTool == QUADDRAW_TOOL_MULTICUT)
     {
         m_shiftQuadPreview.valid = false;
@@ -1095,7 +1095,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 m_hoverSnap.retopoVertexIndex = bestPolyV;
 
                 bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
+                StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s : "QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
                     bestPolyV, targetName));
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
@@ -1111,7 +1111,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 m_hoverTweak.edgeWorld0 = polyEdge.worldPos0;
                 m_hoverTweak.edgeWorld1 = polyEdge.worldPos1;
 
-                Bool extrudeLMB = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+                Bool extrudeLMB = (activeTool != QUADDRAW_TOOL_MOVE) && data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
                 Int32 edgePolyCount = 0;
                 Int32 pCount = retopo->GetPolygonCount();
                 const CPolygon* rPolys = retopo->GetPolygonR();
@@ -1129,12 +1129,12 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 }
                 else if (edgePolyCount >= 2)
                 {
-                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s,
+                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s : "QuadDraw | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s,
                         polyEdge.v0, polyEdge.v1, targetName));
                 }
                 else
                 {
-                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Edge (#@ - #@) | Target: @"_s : "QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
                         polyEdge.v0, polyEdge.v1, targetName));
                 }
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -1155,7 +1155,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             m_hoverTweak.polyWorld[3] = rMg * pts[p.d];
 
             bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-            StatusSetText(FormatString("QuadDraw | LMB Drag: Move Polygon #@ | Target: @"_s,
+            StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Polygon #@ | Target: @"_s : "QuadDraw | LMB Drag: Move Polygon #@ | Target: @"_s,
                 underPoly, targetName));
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             return true;
@@ -1176,7 +1176,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 m_hoverSnap.retopoVertexIndex = nearV;
 
                 bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
-                StatusSetText(FormatString("QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
+                StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s : "QuadDraw | LMB Drag: Move Vertex #@ (Weld on drop) | Target: @"_s,
                     nearV, targetName));
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                 return true;
@@ -1192,7 +1192,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 m_hoverTweak.edgeWorld0 = nearEdge.worldPos0;
                 m_hoverTweak.edgeWorld1 = nearEdge.worldPos1;
 
-                Bool extrudeLMB = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+                Bool extrudeLMB = (activeTool != QUADDRAW_TOOL_MOVE) && data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
                 Int32 edgePolyCount = 0;
                 Int32 pCount = retopo->GetPolygonCount();
                 const CPolygon* rPolys = retopo->GetPolygonR();
@@ -1210,12 +1210,12 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 }
                 else if (edgePolyCount >= 2)
                 {
-                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s,
+                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s : "QuadDraw | LMB Drag: Move Interior Edge (#@ - #@) | Target: @"_s,
                         nearEdge.v0, nearEdge.v1, targetName));
                 }
                 else
                 {
-                    StatusSetText(FormatString("QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Edge (#@ - #@) | Target: @"_s : "QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
                         nearEdge.v0, nearEdge.v1, targetName));
                 }
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -1224,7 +1224,16 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         }
     }
 
-    // 4. Empty surface hover -> ready to place point
+    // 4. Empty surface hover -> ready to place point (only if not Move tool)
+    if (activeTool == QUADDRAW_TOOL_MOVE)
+    {
+        m_hoverSnap.valid = false;
+        bc.SetInt32(RESULT_CURSOR, MOUSE_NORMAL);
+        StatusSetText(FormatString("QuadDraw [MOVE] | Drag Vertices, Edges, or Polygons to Move / Tweak | Mesh: @ | Target: @"_s,
+            retopo ? retopo->GetName() : "None"_s, targetName));
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
     if (target)
     {
         m_hoverSnap = m_snapper.RaycastSurface(bd, target, x, y);
@@ -2485,6 +2494,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     if (!retopo) return false;
 
     PolygonObject* target = GetTargetMesh(doc, retopo);
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
 
     // ==========================================
     // ACTION 1: CTRL + SHIFT + LMB -> DELETE ELEMENT
@@ -2709,7 +2719,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
 
         if (m_componentLoop.type == ComponentLoopType::Edge && m_componentLoop.edges.GetCount() > 0)
         {
-            Bool extrudeEnabled = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+            Bool extrudeEnabled = (activeTool != QUADDRAW_TOOL_MOVE) && data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
             if (extrudeEnabled)
             {
                 // If it is a border loop, DoExtrudeEdgeLoopDrag executes extrude (or selects on click <3px) and returns true.
@@ -2730,7 +2740,6 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // ==========================================
     // ACTION 2B: KNIFE TOOL MODE (ACTIVE TOOL == KNIFE) + LMB -> CUT / INSERT EDGE LOOP
     // ==========================================
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
     if (activeTool == QUADDRAW_TOOL_KNIFE && !(qualifier & QSHIFT) && !(qualifier & QCTRL))
     {
         if (!m_edgeCutPreview.valid)
@@ -3340,7 +3349,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         Int32 v1 = hitEdge.v1;
 
         // Check if Extrude Border Edge on LMB Drag is enabled
-        Bool extrudeLMB = data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+        Bool extrudeLMB = (activeTool != QUADDRAW_TOOL_MOVE) && data.GetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
         if (extrudeLMB)
         {
             Int32 polyCount = retopo->GetPolygonCount();
@@ -3627,6 +3636,10 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // Priority 4: Place Point
+    if (activeTool == QUADDRAW_TOOL_MOVE)
+    {
+        return true; // In Move mode, do not place points on empty surface
+    }
     Vector dropPos;
     Bool canPlace = false;
     SnapResult snap;
@@ -4794,7 +4807,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: QuadDraw, Knife (Cut Loops), or Multi-Cut\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: Extrude, Move / Tweak, Knife (Cut Loops), or Multi-Cut\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Ctrl + Shift + Hover: Highlight Vertex, Edge, or Polygon in red for deletion\n- Ctrl + Shift + LMB: Delete highlighted component\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }

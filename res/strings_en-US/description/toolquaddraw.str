@@ -4,7 +4,8 @@ STRINGTABLE toolquaddraw
 
     QUADDRAW_GROUP_TOOL             "Tool Mode";
     QUADDRAW_ACTIVE_TOOL            "Active Tool";
-    QUADDRAW_TOOL_QUAD              "QuadDraw";
+    QUADDRAW_TOOL_QUAD              "Extrude";
+    QUADDRAW_TOOL_MOVE              "Move / Tweak";
     QUADDRAW_TOOL_KNIFE             "Knife (Cut Loops)";
     QUADDRAW_TOOL_MULTICUT          "Multi-Cut";
 
