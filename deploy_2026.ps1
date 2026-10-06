@@ -1,7 +1,7 @@
-$source = "C:\Users\user\Desktop\cpp\C4D_QuadDraw\sdk_2026\build\bin\Release\plugins\C4D_QuadDraw"
+$source = "C:\Users\user\Desktop\cpp\C4D_SDK\sdk_2026\build\bin\Release\plugins\C4D_QuadDraw"
 $dest   = "\\vmware-host\Shared Folders\plugins\C4D_QuadDraw"
 
-Write-Host "`n[DEPLOYMENT] Deploying C4D_QuadDraw to $dest..."
+Write-Host "`n[DEPLOYMENT 2026] Deploying C4D_QuadDraw to $dest..."
 
 if (-not (Test-Path $dest)) {
     New-Item -ItemType Directory -Path $dest -Force | Out-Null

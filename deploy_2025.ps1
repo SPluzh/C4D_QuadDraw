@@ -1,4 +1,4 @@
-$source = "C:\Users\user\Desktop\cpp\C4D_DollyZoom\sdk_2025\build\bin\Release\plugins\C4D_QuadDraw"
+$source = "C:\Users\user\Desktop\cpp\C4D_SDK\sdk_2025\build\bin\Release\plugins\C4D_QuadDraw"
 $dest   = "\\vmware-host\Shared Folders\plugins\C4D_QuadDraw"
 $resSrc = "C:\Users\user\Desktop\cpp\C4D_QuadDraw\res"
 
