@@ -207,6 +207,38 @@ private:
     SliceDrag m_sliceDrag;
 
     Bool CommitMultiCut(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, PolygonObject* retopo, PolygonObject* target);
+
+    // Pie Menu state (Shift + RMB Marking Menu)
+    struct PieMenuItem
+    {
+        Int32         toolId = 0;
+        maxon::String title;
+        maxon::String subtitle;
+        Float         angleRad = 0.0;
+        Vector        accentColor = Vector(1.0);
+    };
+
+    struct PieMenuState
+    {
+        Bool   active = false;
+        Float  originX = 0.0;
+        Float  originY = 0.0;
+        Float  currentX = 0.0;
+        Float  currentY = 0.0;
+        Int32  hoveredIndex = NOTOK;
+        Int32  activeToolOnOpen = 0;
+
+        static const Int32 ITEM_COUNT = 4;
+        PieMenuItem items[ITEM_COUNT];
+
+        void Init();
+    };
+
+    PieMenuState m_pieMenu;
+
+    void UpdatePieMenuHover();
+    void DrawPieMenu(BaseDraw* bd, const BaseContainer& data);
+    Bool DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, Float mx, Float my);
 };
 
 Bool RegisterQuadDraw();

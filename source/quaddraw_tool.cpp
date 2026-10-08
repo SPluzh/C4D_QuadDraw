@@ -23,6 +23,9 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
 
     m_shiftHeld = false;
     m_ctrlHeld = false;
+    m_pieMenu.Init();
+    m_pieMenu.active = false;
+    m_pieMenu.hoveredIndex = NOTOK;
     m_shiftQuadPreview.valid = false;
     m_edgeCutPreview.valid = false;
     m_cachedCutV0 = NOTOK;
@@ -150,6 +153,8 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
 
     m_shiftHeld = false;
     m_ctrlHeld = false;
+    m_pieMenu.active = false;
+    m_pieMenu.hoveredIndex = NOTOK;
     m_shiftQuadPreview.valid = false;
     m_edgeCutPreview.valid = false;
     m_deleteHighlight.type = DeleteTargetType::None;
@@ -504,6 +509,68 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     Int32 retopoPolys = retopo ? retopo->GetPolygonCount() : 0;
     Int32 retopoPts = retopo ? retopo->GetPointCount() : 0;
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
+    // =========================================================================
+    // MODE 0: CTRL + SHIFT HELD (PIE MENU / MARKING MENU)
+    // =========================================================================
+    Bool ctrlShift = (m_shiftHeld && m_ctrlHeld);
+    if (ctrlShift)
+    {
+        if (!m_pieMenu.active)
+        {
+            m_pieMenu.Init();
+            m_pieMenu.active = true;
+            m_pieMenu.originX = x;
+            m_pieMenu.originY = y;
+            m_pieMenu.currentX = x;
+            m_pieMenu.currentY = y;
+            m_pieMenu.hoveredIndex = NOTOK;
+            m_pieMenu.activeToolOnOpen = activeTool;
+        }
+        else
+        {
+            m_pieMenu.currentX = x;
+            m_pieMenu.currentY = y;
+            UpdatePieMenuHover();
+        }
+
+        m_hoverSnap.valid = false;
+        m_hoverTweak.Reset();
+        m_componentLoop.Reset();
+        m_shiftQuadPreview.valid = false;
+        m_edgeCutPreview.valid = false;
+        m_deleteHighlight.Reset();
+
+        if (m_pieMenu.hoveredIndex != NOTOK)
+        {
+            StatusSetText(FormatString("QuadDraw [MARKING MENU] | Hover: @ | Release Ctrl+Shift to select"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
+        }
+        else
+        {
+            StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
+        }
+
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+    else if (m_pieMenu.active && !ctrlShift)
+    {
+        // Ctrl+Shift was released: commit the selected tool!
+        m_pieMenu.active = false;
+        if (m_pieMenu.hoveredIndex >= 0 && m_pieMenu.hoveredIndex < PieMenuState::ITEM_COUNT)
+        {
+            Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
+            if (newTool != m_pieMenu.activeToolOnOpen)
+            {
+                data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+                StatusSetText(FormatString("QuadDraw: Tool switched to '@'"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
+                EventAdd();
+            }
+        }
+        m_pieMenu.hoveredIndex = NOTOK;
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
 
     // =========================================================================
     // MODE 1: DELETE MODE (ACTIVE TOOL == DELETE)
@@ -2658,9 +2725,34 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     Int32 qualifier = msg.GetInt32(BFM_INPUT_QUALIFIER);
     Bool shiftPressed = ((qualifier & QSHIFT) != 0) || m_shiftHeld;
 
-    // Handle RMB for Multi-Cut commit
+    // If Pie Menu is active or Ctrl+Shift is held during click:
+    if (m_pieMenu.active || (shiftPressed && ((qualifier & QCTRL) != 0)))
+    {
+        if (m_pieMenu.hoveredIndex >= 0 && m_pieMenu.hoveredIndex < PieMenuState::ITEM_COUNT)
+        {
+            Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
+            if (newTool != m_pieMenu.activeToolOnOpen)
+            {
+                data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+                StatusSetText(FormatString("QuadDraw: Tool switched to '@'"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
+                EventAdd();
+            }
+        }
+        m_pieMenu.active = false;
+        m_pieMenu.hoveredIndex = NOTOK;
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    // Handle RMB
     if (channel == BFM_INPUT_MOUSERIGHT)
     {
+        // Shift + RMB: Pie Menu (Marking Menu) for fast tool switching
+        if (shiftPressed)
+        {
+            return DoPieMenuDrag(doc, data, bd, win, mx, my);
+        }
+
         Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
         if (activeTool == QUADDRAW_TOOL_MULTICUT)
         {
@@ -5310,11 +5402,320 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         drawPoint(m_hoverSnap.worldPos, wireColor, pointSize, disableXRay);
     }
 
+    // 9. Draw Pie Menu overlay (Shift + RMB Marking Menu)
+    if (m_pieMenu.active)
+    {
+        DrawPieMenu(bd, data);
+    }
+
     bd->SetDrawParam(DRAW_PARAMETER_USE_Z, oldUseZ);
     bd->SetDrawParam(DRAW_PARAMETER_SETZ, oldSetZ);
     bd->SetDrawParam(DRAW_PARAMETER_LINEWIDTH, oldLineWidth);
     bd->LineZOffset(0);
     return TOOLDRAW::HANDLES | TOOLDRAW::AXIS;
+}
+
+// ============================================================================
+// PIE MENU (SHIFT + RMB MARKING MENU) IMPLEMENTATION
+// ============================================================================
+
+void QuadDrawToolData::PieMenuState::Init()
+{
+    // Item 0: Up (North, -90 deg) -> Extrude (Quad)
+    items[0].toolId = QUADDRAW_TOOL_QUAD;
+    items[0].title = "Extrude (Quad)"_s;
+    items[0].subtitle = "Quads & Extrude"_s;
+    items[0].angleRad = -PI * 0.5;
+    items[0].accentColor = Vector(0.15, 0.85, 0.45); // Mint Green
+
+    // Item 1: Right (East, 0 deg) -> Move / Tweak
+    items[1].toolId = QUADDRAW_TOOL_MOVE;
+    items[1].title = "Move / Tweak"_s;
+    items[1].subtitle = "Tweak Components"_s;
+    items[1].angleRad = 0.0;
+    items[1].accentColor = Vector(0.25, 0.65, 1.0); // Cyan / Blue
+
+    // Item 2: Down (South, +90 deg) -> Multi-Cut
+    items[2].toolId = QUADDRAW_TOOL_MULTICUT;
+    items[2].title = "Multi-Cut"_s;
+    items[2].subtitle = "Cut & Slice"_s;
+    items[2].angleRad = PI * 0.5;
+    items[2].accentColor = Vector(1.0, 0.75, 0.2); // Amber / Yellow
+
+    // Item 3: Left (West, 180 deg) -> Delete
+    items[3].toolId = QUADDRAW_TOOL_DELETE;
+    items[3].title = "Delete"_s;
+    items[3].subtitle = "Delete Elements"_s;
+    items[3].angleRad = PI;
+    items[3].accentColor = Vector(1.0, 0.3, 0.3); // Red
+}
+
+void QuadDrawToolData::UpdatePieMenuHover()
+{
+    Float dx = m_pieMenu.currentX - m_pieMenu.originX;
+    Float dy = m_pieMenu.currentY - m_pieMenu.originY;
+    Float distSq = dx * dx + dy * dy;
+
+    const Float deadzone = 20.0;
+    if (distSq < deadzone * deadzone)
+    {
+        m_pieMenu.hoveredIndex = NOTOK;
+        return;
+    }
+
+    Float angle = std::atan2(dy, dx);
+    Float deg = angle * (180.0 / PI);
+
+    // 4 cardinal sectors of 90 degrees each:
+    // Top: [-135, -45] -> 0: Extrude (Up)
+    // Right: [-45, 45] -> 1: Move / Tweak (Right)
+    // Bottom: [45, 135] -> 2: Multi-Cut (Down)
+    // Left: > 135 or < -135 -> 3: Delete (Left)
+    if (deg >= -135.0 && deg < -45.0)
+    {
+        m_pieMenu.hoveredIndex = 0;
+    }
+    else if (deg >= -45.0 && deg < 45.0)
+    {
+        m_pieMenu.hoveredIndex = 1;
+    }
+    else if (deg >= 45.0 && deg < 135.0)
+    {
+        m_pieMenu.hoveredIndex = 2;
+    }
+    else
+    {
+        m_pieMenu.hoveredIndex = 3;
+    }
+}
+
+void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data)
+{
+    if (!bd || !m_pieMenu.active) return;
+
+    bd->SetMatrix_Screen();
+    bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
+    bd->SetDrawParam(DRAW_PARAMETER_SETZ, GeData(DRAW_Z_ALWAYS));
+    bd->SetDrawParam(DRAW_PARAMETER_LINEWIDTH, GeData(1.0));
+
+    Float ox = m_pieMenu.originX;
+    Float oy = m_pieMenu.originY;
+    Float curX = m_pieMenu.currentX;
+    Float curY = m_pieMenu.currentY;
+
+    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
+    auto drawScreenQuad = [&](Float x1, Float y1, Float x2, Float y2, const Vector& col)
+    {
+        Vector pts[4] = {
+            Vector(x1, y1, 0.0),
+            Vector(x2, y1, 0.0),
+            Vector(x2, y2, 0.0),
+            Vector(x1, y2, 0.0)
+        };
+        Vector cols[4] = { col, col, col, col };
+        bd->DrawPolygon(pts, cols, true);
+        bd->DrawArrayEnd();
+    };
+
+    auto drawScreenFrame = [&](Float x1, Float y1, Float x2, Float y2, const Vector& col, Float thickness)
+    {
+        bd->SetPen(col);
+        bd->DrawLine2D(Vector(x1, y1, 0.0), Vector(x2, y1, 0.0));
+        bd->DrawLine2D(Vector(x2, y1, 0.0), Vector(x2, y2, 0.0));
+        bd->DrawLine2D(Vector(x2, y2, 0.0), Vector(x1, y2, 0.0));
+        bd->DrawLine2D(Vector(x1, y2, 0.0), Vector(x1, y1, 0.0));
+        if (thickness > 1.0)
+        {
+            bd->DrawLine2D(Vector(x1 - 1.0, y1 - 1.0, 0.0), Vector(x2 + 1.0, y1 - 1.0, 0.0));
+            bd->DrawLine2D(Vector(x2 + 1.0, y1 - 1.0, 0.0), Vector(x2 + 1.0, y2 + 1.0, 0.0));
+            bd->DrawLine2D(Vector(x2 + 1.0, y2 + 1.0, 0.0), Vector(x1 - 1.0, y2 + 1.0, 0.0));
+            bd->DrawLine2D(Vector(x1 - 1.0, y2 + 1.0, 0.0), Vector(x1 - 1.0, y1 - 1.0, 0.0));
+        }
+    };
+
+    auto drawScreenCircleFilled = [&](Float cx, Float cy, Float r, const Vector& col, Int32 segments)
+    {
+        for (Int32 s = 0; s < segments; ++s)
+        {
+            Float a0 = (Float(s) / Float(segments)) * 2.0 * PI;
+            Float a1 = (Float(s + 1) / Float(segments)) * 2.0 * PI;
+            Vector pts[3] = {
+                Vector(cx, cy, 0.0),
+                Vector(cx + std::cos(a0) * r, cy + std::sin(a0) * r, 0.0),
+                Vector(cx + std::cos(a1) * r, cy + std::sin(a1) * r, 0.0)
+            };
+            Vector cols[3] = { col, col, col };
+            bd->DrawPolygon(pts, cols, false);
+        }
+        bd->DrawArrayEnd();
+    };
+
+    // 1. Center hub (deadzone = 20px)
+    const Float deadzoneRadius = 20.0;
+    drawScreenCircleFilled(ox, oy, deadzoneRadius, Vector(0.12, 0.13, 0.16), 24);
+    bd->SetPen(Vector(0.38, 0.42, 0.48));
+    bd->DrawCircle2D((Int32)ox, (Int32)oy, deadzoneRadius);
+
+    // Crosshair at center
+    bd->SetPen(Vector(0.55, 0.6, 0.65));
+    bd->DrawLine2D(Vector(ox - 4.0, oy, 0.0), Vector(ox + 4.0, oy, 0.0));
+    bd->DrawLine2D(Vector(ox, oy - 4.0, 0.0), Vector(ox, oy + 4.0, 0.0));
+
+    // 2. Direction pointer line from center to cursor (when outside deadzone)
+    Float vdx = curX - ox;
+    Float vdy = curY - oy;
+    Float dist = std::sqrt(vdx * vdx + vdy * vdy);
+    if (dist > deadzoneRadius)
+    {
+        Vector pointerCol = (m_pieMenu.hoveredIndex != NOTOK) ? m_pieMenu.items[m_pieMenu.hoveredIndex].accentColor : Vector(0.65, 0.65, 0.7);
+        bd->SetPen(pointerCol);
+        bd->DrawLine2D(Vector(ox, oy, 0.0), Vector(curX, curY, 0.0));
+
+        // Cursor handle dot
+        drawScreenCircleFilled(curX, curY, 3.5, pointerCol, 12);
+    }
+
+    // 3. Render 4 radial tool cards
+    const Float distCard = 80.0;
+    const Float baseW = 120.0;
+    const Float baseH = 32.0;
+
+    for (Int32 i = 0; i < PieMenuState::ITEM_COUNT; ++i)
+    {
+        const PieMenuItem& item = m_pieMenu.items[i];
+        Bool isHovered = (m_pieMenu.hoveredIndex == i);
+        Bool isActiveTool = (item.toolId == activeTool);
+
+        Float cx = ox + std::cos(item.angleRad) * distCard;
+        Float cy = oy + std::sin(item.angleRad) * distCard;
+
+        Float hw = (isHovered ? baseW + 10.0 : baseW) * 0.5;
+        Float hh = (isHovered ? baseH + 6.0 : baseH) * 0.5;
+
+        Float x1 = cx - hw;
+        Float x2 = cx + hw;
+        Float y1 = cy - hh;
+        Float y2 = cy + hh;
+
+        Vector bgCol;
+        if (isHovered)
+        {
+            bgCol = Vector(0.18, 0.22, 0.26) + item.accentColor * 0.12;
+        }
+        else if (isActiveTool)
+        {
+            bgCol = Vector(0.12, 0.14, 0.18);
+        }
+        else
+        {
+            bgCol = Vector(0.08, 0.09, 0.11);
+        }
+
+        drawScreenQuad(x1, y1, x2, y2, bgCol);
+
+        if (isHovered)
+        {
+            drawScreenFrame(x1, y1, x2, y2, item.accentColor, 2.0);
+        }
+        else if (isActiveTool)
+        {
+            drawScreenFrame(x1, y1, x2, y2, item.accentColor * 0.75, 1.5);
+        }
+        else
+        {
+            drawScreenFrame(x1, y1, x2, y2, Vector(0.28, 0.30, 0.34), 1.0);
+        }
+
+        // Connector line from center hub to card
+        Vector spokeCol = isHovered ? item.accentColor * 0.7 : (isActiveTool ? item.accentColor * 0.4 : Vector(0.22, 0.24, 0.28));
+        bd->SetPen(spokeCol);
+        Float spokeStartX = ox + std::cos(item.angleRad) * (deadzoneRadius + 2.0);
+        Float spokeStartY = oy + std::sin(item.angleRad) * (deadzoneRadius + 2.0);
+        Float spokeEndX = cx - std::cos(item.angleRad) * (hw + 2.0);
+        Float spokeEndY = cy - std::sin(item.angleRad) * (hh + 2.0);
+        bd->DrawLine2D(Vector(spokeStartX, spokeStartY, 0.0), Vector(spokeEndX, spokeEndY, 0.0));
+
+        // Label text
+        maxon::String labelText = item.title;
+        if (isActiveTool)
+        {
+            labelText += " *"_s;
+        }
+
+        Int32 charCount = labelText.GetLength();
+        Int32 textX = (Int32)(cx - (charCount * 7.0) * 0.5);
+        Int32 textY = (Int32)(cy - 5.0);
+
+        Vector textCol = isHovered ? Vector(1.0, 1.0, 1.0) : (isActiveTool ? item.accentColor : Vector(0.75, 0.78, 0.82));
+        bd->SetPen(textCol);
+        bd->DrawHUDText(textX, textY, labelText);
+    }
+}
+
+Bool QuadDrawToolData::DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, Float mx, Float my)
+{
+    if (!doc || !bd || !win) return false;
+
+    m_pieMenu.Init();
+    m_pieMenu.active = true;
+    m_pieMenu.originX = mx;
+    m_pieMenu.originY = my;
+    m_pieMenu.currentX = mx;
+    m_pieMenu.currentY = my;
+    m_pieMenu.hoveredIndex = NOTOK;
+    m_pieMenu.activeToolOnOpen = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+
+    BaseContainer device;
+    win->MouseDragStart(KEY_MRIGHT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+    Float curX = mx;
+    Float curY = my;
+    Float dx = 0.0, dy = 0.0;
+    MOUSEDRAGRESULT dragResult = MOUSEDRAGRESULT::CONTINUE;
+
+    while ((dragResult = win->MouseDrag(&dx, &dy, &device)) == MOUSEDRAGRESULT::CONTINUE)
+    {
+        if (dx == 0.0 && dy == 0.0)
+            continue;
+
+        curX += dx;
+        curY += dy;
+        m_pieMenu.currentX = curX;
+        m_pieMenu.currentY = curY;
+
+        UpdatePieMenuHover();
+
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    }
+
+    win->MouseDragEnd();
+    m_pieMenu.active = false;
+
+    if (dragResult != MOUSEDRAGRESULT::ESCAPE && m_pieMenu.hoveredIndex >= 0 && m_pieMenu.hoveredIndex < PieMenuState::ITEM_COUNT)
+    {
+        Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
+        if (newTool != m_pieMenu.activeToolOnOpen)
+        {
+            data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+            StatusSetText(FormatString("QuadDraw: Switched to '@' tool"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
+
+            m_shiftQuadPreview.valid = false;
+            m_edgeCutPreview.valid = false;
+            m_deleteHighlight.Reset();
+            m_componentLoop.Reset();
+            m_multiCutHover = MultiCutPoint();
+            m_hoverTweak.Reset();
+            m_activeDragMode = TweakMode::None;
+
+            EventAdd();
+        }
+    }
+
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    return true;
 }
 
 Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, const BaseContainer& msg)
@@ -5326,6 +5727,47 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
 
     Int32 key = msg.GetInt32(BFM_INPUT_CHANNEL);
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+
+    Bool ctrlShift = (m_shiftHeld && m_ctrlHeld);
+    if (ctrlShift && !m_pieMenu.active)
+    {
+        m_pieMenu.Init();
+        m_pieMenu.active = true;
+        m_pieMenu.originX = m_cursorX;
+        m_pieMenu.originY = m_cursorY;
+        m_pieMenu.currentX = m_cursorX;
+        m_pieMenu.currentY = m_cursorY;
+        m_pieMenu.hoveredIndex = NOTOK;
+        m_pieMenu.activeToolOnOpen = activeTool;
+
+        m_hoverSnap.valid = false;
+        m_hoverTweak.Reset();
+        m_componentLoop.Reset();
+        m_shiftQuadPreview.valid = false;
+        m_edgeCutPreview.valid = false;
+        m_deleteHighlight.Reset();
+
+        StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+    else if (!ctrlShift && m_pieMenu.active)
+    {
+        m_pieMenu.active = false;
+        if (m_pieMenu.hoveredIndex >= 0 && m_pieMenu.hoveredIndex < PieMenuState::ITEM_COUNT)
+        {
+            Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
+            if (newTool != m_pieMenu.activeToolOnOpen)
+            {
+                data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+                StatusSetText(FormatString("QuadDraw: Tool switched to '@'"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
+                EventAdd();
+            }
+        }
+        m_pieMenu.hoveredIndex = NOTOK;
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
 
     if (activeTool == QUADDRAW_TOOL_MULTICUT)
     {
@@ -5424,6 +5866,8 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_weldTargetIdx2 = NOTOK;
         m_isResizingBrush = false;
         m_isRelaxDragging = false;
+        m_pieMenu.active = false;
+        m_pieMenu.hoveredIndex = NOTOK;
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -5439,7 +5883,7 @@ Bool RegisterQuadDraw()
         "QuadDraw Retopo"_s,
         PLUGINFLAG_TOOL_HIGHLIGHT,
         AutoBitmap("quaddraw.png"_s),
-        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: Extrude, Move / Tweak, Knife (Cut Loops), Multi-Cut, or Delete\n- Delete Mode: LMB Click on Vertex, Edge, or Polygon to delete; Hold Ctrl to delete chains / loops\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Esc: Clear active preview"_s,
+        "QuadDraw Retopo Tool (Maya-style)\n- Tool Mode in Settings: Extrude, Move / Tweak, Knife (Cut Loops), Multi-Cut, or Delete\n- Hold Ctrl + Shift: Marking Menu (Pie Menu) for fast tool switching (Up: Extrude, Right: Move, Down: Multi-Cut, Left: Delete)\n- Delete Mode: LMB Click on Vertex, Edge, or Polygon to delete; Hold Ctrl to delete chains / loops\n- Multi-Cut: LMB Click to place points on edges/vertices, Shift to snap 50%/25%, Enter/RMB to commit, Backspace to undo, Esc to cancel, LMB Drag to slice cut\n- LMB: Click on surface to drop points (in Knife mode: insert edge loop)\n- LMB Drag on Border Edge: Extrude border edge (toggle in tool settings)\n- LMB Drag: Move/tweak vertex or edge (weld on drop onto another vertex)\n- Shift + Hover: Preview prospective quad polygon\n- Shift + LMB: Create quad polygon\n- Shift + LMB Drag: Relax mesh (Maya-style Relax Brush)\n- Shift + MMB Drag: Adjust relax brush radius (horizontal) & strength (vertical)\n- Ctrl + Hover: Highlight loop of components (Vertex, Edge, or Polygon Loop)\n- Ctrl + LMB: Select component loop\n- Esc: Clear active preview"_s,
         NewObjClear(QuadDrawToolData)
     );
 }
