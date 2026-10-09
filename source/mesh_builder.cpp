@@ -469,6 +469,12 @@ Bool MeshBuilder::WeldVertices(PolygonObject* mesh, Int32 vSource, Int32 vTarget
             newPolys[i] = validPolys[i];
     }
 
+    BaseSelect* bs = GetMeshPinnedSelection(mesh);
+    if (bs && bs->IsSelected(vSource))
+    {
+        bs->Select(vTarget);
+    }
+
     return DeleteVertex(mesh, vSource);
 }
 
@@ -571,6 +577,7 @@ Bool MeshBuilder::DeleteVertex(PolygonObject* mesh, Int32 ptIndex)
     for (Int32 i = 0; i < (Int32)finalPolys.GetCount(); ++i)
         polysW[i] = finalPolys[i];
 
+    RemapPinnedVertices(mesh, oldToNew);
     NotifyMeshUpdated(mesh);
     return true;
 }
@@ -783,6 +790,7 @@ Bool MeshBuilder::DeletePolygon(PolygonObject* mesh, Int32 polyIndex)
     for (Int32 i = 0; i < (Int32)finalPolys.GetCount(); ++i)
         polysW[i] = finalPolys[i];
 
+    RemapPinnedVertices(mesh, oldToNew);
     NotifyMeshUpdated(mesh);
     return true;
 }
@@ -967,6 +975,7 @@ Int32 MeshBuilder::DeleteAllUnconnectedPoints(PolygonObject* mesh)
     for (Int32 i = 0; i < polyCount; ++i)
         polysW[i] = finalPolys[i];
 
+    RemapPinnedVertices(mesh, oldToNew);
     NotifyMeshUpdated(mesh);
     return deletedCount;
 }
@@ -1966,6 +1975,7 @@ Bool MeshBuilder::DeleteEdgeLoop(PolygonObject* mesh, const maxon::BaseArray<Loo
     for (Int32 i = 0; i < (Int32)finalPolys.GetCount(); ++i)
         polysW[i] = finalPolys[i];
 
+    RemapPinnedVertices(mesh, oldToNew);
     NotifyMeshUpdated(mesh);
     return true;
 }
@@ -3933,7 +3943,7 @@ Bool MeshBuilder::IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float 
     return (minBorderDist <= minInteriorDist);
 }
 
-Bool MeshBuilder::RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder, Bool lockInterior, Bool visibleOnly)
+Bool MeshBuilder::RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder, Bool lockInterior, Bool visibleOnly, const BaseSelect* pinnedVertices)
 {
     if (!retopo || !bd || brushRadius <= 0.0 || strength <= 0.0)
         return false;
@@ -4181,6 +4191,9 @@ Bool MeshBuilder::RelaxVertices(PolygonObject* retopo, PolygonObject* target, Su
         Float w = vertexWeights[ai];
         if (w <= 0.001) continue;
 
+        if (pinnedVertices && pinnedVertices->IsSelected(idx))
+            continue;
+
         const maxon::BaseArray<Int32>& bNeighbors = m_edgeCache.boundaryNeighbors[idx];
         const maxon::BaseArray<Int32>& nNeighbors = m_edgeCache.allNeighbors[idx];
 
@@ -4257,7 +4270,8 @@ Bool MeshBuilder::CollectGrabVertices(
     Int32 falloffType,
     Bool visibleOnly,
     maxon::BaseArray<GrabVertexInfo>& outVertices,
-    Vector& outGrabCenterWorld)
+    Vector& outGrabCenterWorld,
+    const BaseSelect* pinnedVertices)
 {
     outVertices.Reset();
     outGrabCenterWorld = Vector(0.0);
@@ -4423,6 +4437,9 @@ Bool MeshBuilder::CollectGrabVertices(
         Float dy = screenPos.y - screenY;
         Float dist = std::sqrt(dx * dx + dy * dy);
         if (dist > brushRadius) continue;
+
+        if (pinnedVertices && pinnedVertices->IsSelected(i))
+            continue;
 
         if (visibleOnly && polyCount > 0)
         {

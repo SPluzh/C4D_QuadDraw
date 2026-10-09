@@ -12,12 +12,49 @@ Bool QuadDrawTagData::Init(GeListNode* node, Bool isCloneInit)
     BaseContainer* data = tag->GetDataInstance();
     if (!data) return false;
 
-    if (!isCloneInit)
+    if (!isCloneInit && m_pinned)
     {
-        // QUADDRAW_TAG_TARGET is empty by default
+        m_pinned->DeselectAll();
     }
 
     return true;
+}
+
+void QuadDrawTagData::Free(GeListNode* node)
+{
+    if (m_pinned)
+    {
+        m_pinned->DeselectAll();
+    }
+}
+
+Bool QuadDrawTagData::Read(GeListNode* node, HyperFile* hf, Int32 level)
+{
+    if (m_pinned && hf)
+    {
+        m_pinned->Read(hf);
+    }
+    return TagData::Read(node, hf, level);
+}
+
+Bool QuadDrawTagData::Write(const GeListNode* node, HyperFile* hf) const
+{
+    if (m_pinned && hf)
+    {
+        m_pinned->Write(hf);
+    }
+    return TagData::Write(node, hf);
+}
+
+Bool QuadDrawTagData::CopyTo(NodeData* dest, const GeListNode* snode, GeListNode* dnode, COPYFLAGS flags, AliasTrans* trn) const
+{
+    const QuadDrawTagData* srcData = this;
+    QuadDrawTagData* dstData = static_cast<QuadDrawTagData*>(dest);
+    if (dstData && srcData->m_pinned && dstData->m_pinned)
+    {
+        srcData->m_pinned->CopyTo(dstData->m_pinned);
+    }
+    return TagData::CopyTo(dest, snode, dnode, flags, trn);
 }
 
 Bool QuadDrawTagData::GetDDescription(const GeListNode* node, Description* description, DESCFLAGS_DESC& flags) const
@@ -49,6 +86,52 @@ Bool QuadDrawTagData::GetDDescription(const GeListNode* node, Description* descr
 EXECUTIONRESULT QuadDrawTagData::Execute(BaseTag* tag, BaseDocument* doc, BaseObject* op, BaseThread* bt, Int32 priority, EXECUTIONFLAGS flags)
 {
     return EXECUTIONRESULT::OK;
+}
+
+QuadDrawTagData* GetQuadDrawTagData(PolygonObject* mesh)
+{
+    if (!mesh) return nullptr;
+    BaseTag* tag = mesh->GetTag(PLUGIN_ID_QUADDRAW_TAG);
+    if (!tag) return nullptr;
+    return tag->GetNodeData<QuadDrawTagData>();
+}
+
+BaseSelect* GetMeshPinnedSelection(PolygonObject* mesh)
+{
+    QuadDrawTagData* td = GetQuadDrawTagData(mesh);
+    return td ? td->GetPinnedSelection() : nullptr;
+}
+
+Bool IsVertexPinned(PolygonObject* mesh, Int32 ptIdx)
+{
+    BaseSelect* bs = GetMeshPinnedSelection(mesh);
+    return (bs && ptIdx >= 0) ? bs->IsSelected(ptIdx) : false;
+}
+
+void RemapPinnedVertices(PolygonObject* mesh, const maxon::BaseArray<Int32>& oldToNew)
+{
+    BaseSelect* bs = GetMeshPinnedSelection(mesh);
+    if (!bs || bs->GetCount() == 0) return;
+
+    AutoAlloc<BaseSelect> newPins;
+    if (!newPins) return;
+
+    Int32 seg = 0, a = 0, b = 0;
+    while (bs->GetRange(seg++, LIMIT<Int32>::MAX, &a, &b))
+    {
+        for (Int32 i = a; i <= b; ++i)
+        {
+            if (i >= 0 && i < (Int32)oldToNew.GetCount())
+            {
+                Int32 newIdx = oldToNew[i];
+                if (newIdx != NOTOK)
+                {
+                    newPins->Select(newIdx);
+                }
+            }
+        }
+    }
+    newPins->CopyTo(bs);
 }
 
 Bool RegisterQuadDrawTag()

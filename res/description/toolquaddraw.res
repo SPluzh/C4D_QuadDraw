@@ -19,6 +19,7 @@ CONTAINER toolquaddraw
                     QUADDRAW_TOOL_MULTICUT;
                     QUADDRAW_TOOL_DELETE;
                     QUADDRAW_TOOL_GRAB;
+                    QUADDRAW_TOOL_PIN;
                 }
             }
 
@@ -76,6 +77,24 @@ CONTAINER toolquaddraw
                 }
             }
             BOOL  QUADDRAW_GRAB_VISIBLE_ONLY { }
+        }
+
+        GROUP QUADDRAW_GROUP_PIN
+        {
+            DEFAULT 1;
+
+            REAL  QUADDRAW_PIN_RADIUS       { MIN 5.0; MAX 500.0; MINSLIDER 10.0; MAXSLIDER 200.0; STEP 5.0; CUSTOMGUI REALSLIDER; }
+            COLOR QUADDRAW_PIN_COLOR        { }
+            BOOL  QUADDRAW_PIN_VISIBLE_ONLY { }
+
+            GROUP
+            {
+                COLUMNS 2;
+                BUTTON QUADDRAW_PIN_BORDER  { }
+                BUTTON QUADDRAW_PIN_ALL     { }
+                BUTTON QUADDRAW_UNPIN_ALL   { }
+                BUTTON QUADDRAW_INVERT_PINS { }
+            }
         }
 
         GROUP QUADDRAW_GROUP_DISPLAY

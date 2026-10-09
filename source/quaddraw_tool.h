@@ -49,6 +49,12 @@ private:
                                            Float mx, Float my, Int32 dragButton);
     Bool           DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
                                    PolygonObject* retopo, PolygonObject* target, Float mx, Float my);
+    Bool           DoPinDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                             PolygonObject* retopo, PolygonObject* target, Float mx, Float my, Bool unpinMode);
+    Bool           PinBorderVertices(BaseDocument* doc, PolygonObject* retopo);
+    Bool           PinAllVertices(BaseDocument* doc, PolygonObject* retopo);
+    Bool           UnpinAllVertices(BaseDocument* doc, PolygonObject* retopo);
+    Bool           InvertPinnedVertices(BaseDocument* doc, PolygonObject* retopo);
 
     SurfaceSnapper m_snapper;
     MeshBuilder    m_builder;
@@ -68,6 +74,8 @@ private:
     Bool           m_isGrabDragging = false;
     Float          m_grabStartX = 0.0;
     Float          m_grabStartY = 0.0;
+    Bool           m_isPinDragging = false;
+    Bool           m_pinUnpinMode = false;
     Bool           m_isResizingBrush = false;
     Float          m_brushResizeCenterX = 0.0;
     Float          m_brushResizeCenterY = 0.0;
@@ -238,7 +246,7 @@ private:
         Int32  hoveredIndex = NOTOK;
         Int32  activeToolOnOpen = 0;
 
-        static const Int32 ITEM_COUNT = 5;
+        static const Int32 ITEM_COUNT = 6;
         PieMenuItem items[ITEM_COUNT];
 
         void Init();

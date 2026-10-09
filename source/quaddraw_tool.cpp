@@ -184,6 +184,10 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     data.SetInt32(QUADDRAW_GRAB_FALLOFF, QUADDRAW_GRAB_FALLOFF_SMOOTH);
     data.SetBool(QUADDRAW_GRAB_VISIBLE_ONLY, true);
 
+    data.SetFloat(QUADDRAW_PIN_RADIUS, 50.0);
+    data.SetVector(QUADDRAW_PIN_COLOR, Vector(0.0, 0.85, 1.0)); // Electric Cyan
+    data.SetBool(QUADDRAW_PIN_VISIBLE_ONLY, true);
+
     DescriptionToolData::InitDefaultSettings(doc, data);
     data.SetBool(MDATA_INTERACTIVE, false);
 }
@@ -316,6 +320,30 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
                     SnapAllPointsToNearestMesh(doc);
                     return true;
                 }
+                else if (dc->_descId[0].id == QUADDRAW_PIN_BORDER)
+                {
+                    PolygonObject* retopo = GetEditableMesh(doc, false);
+                    PinBorderVertices(doc, retopo);
+                    return true;
+                }
+                else if (dc->_descId[0].id == QUADDRAW_PIN_ALL)
+                {
+                    PolygonObject* retopo = GetEditableMesh(doc, false);
+                    PinAllVertices(doc, retopo);
+                    return true;
+                }
+                else if (dc->_descId[0].id == QUADDRAW_UNPIN_ALL)
+                {
+                    PolygonObject* retopo = GetEditableMesh(doc, false);
+                    UnpinAllVertices(doc, retopo);
+                    return true;
+                }
+                else if (dc->_descId[0].id == QUADDRAW_INVERT_PINS)
+                {
+                    PolygonObject* retopo = GetEditableMesh(doc, false);
+                    InvertPinnedVertices(doc, retopo);
+                    return true;
+                }
             }
             break;
         }
@@ -327,7 +355,8 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
             {
                 Int32 activeTool = GetActiveTool(doc, data);
                 Bool isGrab = (activeTool == QUADDRAW_TOOL_GRAB);
-                Bool allowResize = isGrab || m_shiftHeld;
+                Bool isPin  = (activeTool == QUADDRAW_TOOL_PIN);
+                Bool allowResize = isGrab || isPin || m_shiftHeld;
                 ask->use_middlemouse = allowResize;
                 ask->resize_allowed = allowResize;
             }
@@ -342,13 +371,14 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
 
             Int32 activeTool = GetActiveTool(doc, data);
             Bool isGrab = (activeTool == QUADDRAW_TOOL_GRAB && !m_shiftHeld);
+            Bool isPin  = (activeTool == QUADDRAW_TOOL_PIN  && !m_shiftHeld);
 
-            Int32 radiusParam = isGrab ? QUADDRAW_GRAB_RADIUS : QUADDRAW_RELAX_RADIUS;
+            Int32 radiusParam = isPin ? QUADDRAW_PIN_RADIUS : (isGrab ? QUADDRAW_GRAB_RADIUS : QUADDRAW_RELAX_RADIUS);
             Int32 strengthParam = isGrab ? QUADDRAW_GRAB_INTENSITY : QUADDRAW_RELAX_STRENGTH;
             Float defRadius = 50.0;
             Float defStrength = isGrab ? 1.0 : 0.35;
             Float minRadius = 5.0;
-            Float maxRadius = isGrab ? 500.0 : 300.0;
+            Float maxRadius = (isGrab || isPin) ? 500.0 : 300.0;
 
             switch (d->pass)
             {
@@ -357,13 +387,14 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
                     d->cross_type = true;
                     d->falloff.show = true;
                     Float currentRadius = data.GetFloat(radiusParam, defRadius);
-                    Float currentStrength = data.GetFloat(strengthParam, defStrength);
+                    Float currentStrength = isPin ? 1.0 : data.GetFloat(strengthParam, defStrength);
                     m_initialResizeRadius = currentRadius;
                     m_initialResizeStrength = currentStrength;
 
                     d->falloff.size = currentRadius;
                     d->falloff.opacity = currentStrength;
-                    d->falloff.color = isGrab ? Vector(1.0, 0.72, 0.2) : Vector(1.0, 1.0, 1.0);
+                    d->falloff.color = isPin ? data.GetVector(QUADDRAW_PIN_COLOR, Vector(0.0, 0.85, 1.0)) :
+                                      (isGrab ? Vector(1.0, 0.72, 0.2) : Vector(1.0, 1.0, 1.0));
                     d->falloff.position.off = Vector(m_cursorX, m_cursorY, 0.0);
                     m_isResizingBrush = true;
                     m_brushResizeCenterX = m_cursorX;
@@ -389,12 +420,14 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
                         }
                         d->falloff.size = radius;
                         d->cursor_text = FormatString("Radius: @ px"_s, (Int32)(radius + 0.5));
-                        if (isGrab)
+                        if (isPin)
+                            StatusSetText(FormatString("QuadDraw [PIN TOOL] | Radius: @ px"_s, (Int32)(radius + 0.5)));
+                        else if (isGrab)
                             StatusSetText(FormatString("QuadDraw [GRAB BRUSH] | Radius: @ px"_s, (Int32)(radius + 0.5)));
                         else
                             StatusSetText(FormatString("QuadDraw [RELAX BRUSH] | Radius: @ px"_s, (Int32)(radius + 0.5)));
                     }
-                    else
+                    else if (!isPin)
                     {
                         Float strength = data.GetFloat(strengthParam, defStrength);
                         strength += (Float)d->delta * 0.005;
@@ -671,6 +704,9 @@ Bool QuadDrawToolData::SnapAllPointsToNearestMesh(BaseDocument* doc)
     Int32 snappedCount = 0;
     for (Int32 i = 0; i < ptCount; ++i)
     {
+        if (IsVertexPinned(retopo, i))
+            continue;
+
         Vector pWorld = retopoMg * ptsR[i];
         Vector closestPt(0.0);
         Vector closestNorm(0.0, 1.0, 0.0);
@@ -1060,7 +1096,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     // =========================================================================
     // MODE 2: CTRL HELD ALONE (COMPONENT LOOP HIGHLIGHT - Vertex, Edge, Polygon Loop)
     // =========================================================================
-    if (m_ctrlHeld && !m_shiftHeld && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE && activeTool != QUADDRAW_TOOL_DELETE)
+    if (m_ctrlHeld && !m_shiftHeld && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE && activeTool != QUADDRAW_TOOL_DELETE && activeTool != QUADDRAW_TOOL_PIN)
     {
         m_shiftQuadPreview.valid = false;
         m_edgeCutPreview.valid = false;
@@ -1250,6 +1286,38 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
         StatusSetText(FormatString("QuadDraw [GRAB] | LMB Drag: Grab Mesh (@ px, @%, @) | MMB Drag: Adjust Radius & Intensity | Target: @"_s,
             (Int32)(grabRadius + 0.5), (Int32)(grabIntensity * 100.0 + 0.5), falloffName, targetName));
+
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    // =========================================================================
+    // MODE 4E: PIN TOOL MODE (ACTIVE TOOL == PIN)
+    // =========================================================================
+    if (activeTool == QUADDRAW_TOOL_PIN)
+    {
+        m_hoverSnap.valid = false;
+        m_shiftQuadPreview.valid = false;
+        m_hoverTweak.mode = TweakMode::None;
+        m_componentLoop.Reset();
+        m_edgeCutPreview.valid = false;
+        m_deleteHighlight.Reset();
+
+        Float pinRadius = data.GetFloat(QUADDRAW_PIN_RADIUS, 50.0);
+        BaseSelect* bs = GetMeshPinnedSelection(retopo);
+        Int32 pinnedCount = bs ? bs->GetCount() : 0;
+
+        bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+        if (m_ctrlHeld)
+        {
+            StatusSetText(FormatString("QuadDraw [PIN] | Ctrl+LMB Drag: Unpin Vertices (@ px) | Pinned: @ vertices"_s,
+                (Int32)(pinRadius + 0.5), pinnedCount));
+        }
+        else
+        {
+            StatusSetText(FormatString("QuadDraw [PIN] | LMB: Paint Pins | Ctrl+LMB: Unpin | MMB Drag: Resize Brush (@ px) | Pinned: @ vertices"_s,
+                (Int32)(pinRadius + 0.5), pinnedCount));
+        }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
@@ -2859,7 +2927,8 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
 
             if (ptsW && loopVerts[k] >= 0 && loopVerts[k] < ptCount)
             {
-                ptsW[loopVerts[k]] = invMg * newPos;
+                if (!IsVertexPinned(retopo, loopVerts[k]))
+                    ptsW[loopVerts[k]] = invMg * newPos;
             }
         }
 
@@ -3035,7 +3104,7 @@ Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, B
 
     if (!m_builder.CollectGrabVertices(retopo, target, m_snapper, bd, mx, my,
                                        brushRadius, intensity, falloffType, visibleOnly,
-                                       grabVerts, grabCenterWorld))
+                                       grabVerts, grabCenterWorld, GetMeshPinnedSelection(retopo)))
     {
         StatusSetText("QuadDraw [GRAB]: No vertices within brush radius."_s);
         return true;
@@ -3177,6 +3246,267 @@ Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, B
     return true;
 }
 
+Bool QuadDrawToolData::DoPinDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                 PolygonObject* retopo, PolygonObject* target, Float mx, Float my, Bool unpinMode)
+{
+    if (!doc || !retopo || !bd || !win)
+        return false;
+
+    Int32 ptCount = retopo->GetPointCount();
+    if (ptCount == 0)
+        return false;
+
+    BaseTag* tag = EnsureQuadDrawTag(doc, retopo);
+    if (!tag)
+        return false;
+
+    BaseSelect* bs = GetMeshPinnedSelection(retopo);
+    if (!bs)
+        return false;
+
+    Float brushRadius = data.GetFloat(QUADDRAW_PIN_RADIUS, 50.0);
+    Bool  visibleOnly = data.GetBool(QUADDRAW_PIN_VISIBLE_ONLY, true);
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, tag);
+
+    m_isPinDragging = true;
+    m_pinUnpinMode  = unpinMode;
+    m_cursorX = mx;
+    m_cursorY = my;
+
+    auto applyPinAt = [&](Float sx, Float sy) -> Int32
+    {
+        Int32 modified = 0;
+        Matrix rMg = retopo->GetMg();
+        const Vector* pts = retopo->GetPointR();
+
+        for (Int32 i = 0; i < ptCount; ++i)
+        {
+            Vector wPos = rMg * pts[i];
+            Vector sPos = bd->WS(wPos);
+            if (sPos.z <= 0.0) continue;
+
+            Float dx = sPos.x - sx;
+            Float dy = sPos.y - sy;
+            Float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > brushRadius) continue;
+
+            if (visibleOnly && target && target->GetPolygonCount() > 0)
+            {
+                SnapResult tSnap = m_snapper.RaycastSurface(bd, target, sPos.x, sPos.y);
+                if (tSnap.valid)
+                {
+                    Float targetZ = bd->WS(tSnap.worldPos).z;
+                    Float targetTol = maxon::Max(Float(2.5), Float(targetZ * 0.01));
+                    if (sPos.z > targetZ + targetTol)
+                        continue;
+                }
+            }
+
+            Bool isCurrentlyPinned = bs->IsSelected(i);
+            if (unpinMode)
+            {
+                if (isCurrentlyPinned)
+                {
+                    bs->Deselect(i);
+                    modified++;
+                }
+            }
+            else
+            {
+                if (!isCurrentlyPinned)
+                {
+                    bs->Select(i);
+                    modified++;
+                }
+            }
+        }
+        return modified;
+    };
+
+    Int32 touched = applyPinAt(mx, my);
+    if (touched == 0)
+    {
+        // Direct click fallback if brush radius did not encompass vertices
+        Int32 nv = m_snapper.FindNearestRetopoVertex(bd, retopo, mx, my, 12.0, NOTOK, target);
+        if (nv != NOTOK)
+        {
+            if (unpinMode) bs->Deselect(nv);
+            else           bs->Select(nv);
+        }
+        else
+        {
+            EdgeHit ne = m_snapper.FindNearestRetopoEdge(bd, retopo, mx, my, 10.0, target);
+            if (ne.valid)
+            {
+                if (unpinMode) { bs->Deselect(ne.v0); bs->Deselect(ne.v1); }
+                else           { bs->Select(ne.v0); bs->Select(ne.v1); }
+            }
+            else
+            {
+                Int32 np = m_builder.FindPolygonUnderScreen(bd, retopo, mx, my, target, &m_snapper);
+                if (np != NOTOK && np < retopo->GetPolygonCount())
+                {
+                    const CPolygon& p = retopo->GetPolygonR()[np];
+                    Int32 pv[4] = { p.a, p.b, p.c, (p.c != p.d) ? p.d : NOTOK };
+                    for (Int32 k = 0; k < 4; ++k)
+                    {
+                        if (pv[k] == NOTOK) continue;
+                        if (unpinMode) bs->Deselect(pv[k]);
+                        else           bs->Select(pv[k]);
+                    }
+                }
+            }
+        }
+    }
+
+    StatusSetText(FormatString("QuadDraw [PIN]: @ | Pinned: @ vertices"_s,
+                               unpinMode ? "Unpinning (Ctrl)"_s : "Pinning"_s, bs->GetCount()));
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
+
+    BaseContainer device;
+    win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+    Float dx, dy;
+    while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+    {
+        if (dx == 0.0 && dy == 0.0) continue;
+        mx += dx;
+        my += dy;
+        m_cursorX = mx;
+        m_cursorY = my;
+
+        if (device.FindIndex(BFM_INPUT_QUALIFIER) != NOTOK)
+        {
+            unpinMode = ((device.GetInt32(BFM_INPUT_QUALIFIER) & QCTRL) != 0);
+            m_pinUnpinMode = unpinMode;
+        }
+
+        applyPinAt(mx, my);
+        StatusSetText(FormatString("QuadDraw [PIN]: @ | Pinned: @ vertices"_s,
+                                   unpinMode ? "Unpinning (Ctrl)"_s : "Pinning"_s, bs->GetCount()));
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
+    }
+
+    win->MouseDragEnd();
+    m_isPinDragging = false;
+    doc->EndUndo();
+    retopo->Message(MSG_UPDATE);
+    EventAdd();
+    SpecialEventAdd(EVMSG_UPDATEHIGHLIGHT);
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
+
+    StatusSetText(FormatString("QuadDraw: Finished pin stroke. Total pinned vertices: @"_s, bs->GetCount()));
+    return true;
+}
+
+Bool QuadDrawToolData::PinBorderVertices(BaseDocument* doc, PolygonObject* retopo)
+{
+    if (!doc || !retopo) return false;
+    Int32 ptCount = retopo->GetPointCount();
+    if (ptCount == 0) return false;
+
+    BaseTag* tag = EnsureQuadDrawTag(doc, retopo);
+    if (!tag) return false;
+
+    BaseSelect* bs = GetMeshPinnedSelection(retopo);
+    if (!bs) return false;
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, tag);
+
+    Int32 count = 0;
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        if (m_builder.IsBoundaryOrIsolatedVertex(retopo, i))
+        {
+            bs->Select(i);
+            count++;
+        }
+    }
+
+    doc->EndUndo();
+    retopo->Message(MSG_UPDATE);
+    EventAdd();
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    StatusSetText(FormatString("QuadDraw: Pinned @ border vertices. Total pinned: @"_s, count, bs->GetCount()));
+    return true;
+}
+
+Bool QuadDrawToolData::PinAllVertices(BaseDocument* doc, PolygonObject* retopo)
+{
+    if (!doc || !retopo) return false;
+    Int32 ptCount = retopo->GetPointCount();
+    if (ptCount == 0) return false;
+
+    BaseTag* tag = EnsureQuadDrawTag(doc, retopo);
+    if (!tag) return false;
+
+    BaseSelect* bs = GetMeshPinnedSelection(retopo);
+    if (!bs) return false;
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, tag);
+
+    bs->SelectAll(0, ptCount - 1, false);
+
+    doc->EndUndo();
+    retopo->Message(MSG_UPDATE);
+    EventAdd();
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    StatusSetText(FormatString("QuadDraw: Pinned all @ vertices."_s, ptCount));
+    return true;
+}
+
+Bool QuadDrawToolData::UnpinAllVertices(BaseDocument* doc, PolygonObject* retopo)
+{
+    if (!doc || !retopo) return false;
+
+    BaseTag* tag = EnsureQuadDrawTag(doc, retopo);
+    if (!tag) return false;
+
+    BaseSelect* bs = GetMeshPinnedSelection(retopo);
+    if (!bs) return false;
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, tag);
+
+    bs->DeselectAll();
+
+    doc->EndUndo();
+    retopo->Message(MSG_UPDATE);
+    EventAdd();
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    StatusSetText("QuadDraw: Unpinned all vertices (cleared all pins)."_s);
+    return true;
+}
+
+Bool QuadDrawToolData::InvertPinnedVertices(BaseDocument* doc, PolygonObject* retopo)
+{
+    if (!doc || !retopo) return false;
+    Int32 ptCount = retopo->GetPointCount();
+    if (ptCount == 0) return false;
+
+    BaseTag* tag = EnsureQuadDrawTag(doc, retopo);
+    if (!tag) return false;
+
+    BaseSelect* bs = GetMeshPinnedSelection(retopo);
+    if (!bs) return false;
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, tag);
+
+    bs->ToggleAll(0, ptCount - 1);
+
+    doc->EndUndo();
+    retopo->Message(MSG_UPDATE);
+    EventAdd();
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    StatusSetText(FormatString("QuadDraw: Inverted pinned vertices. Total pinned: @"_s, bs->GetCount()));
+    return true;
+}
+
 Bool QuadDrawToolData::CommitMultiCut(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, PolygonObject* retopo, PolygonObject* target)
 {
     if (!retopo || m_multiCutPoints.GetCount() < 2)
@@ -3291,17 +3621,20 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // =========================================================================
-    // ACTION 0: MMB DRAG -> RESIZE BRUSH (RELAX OR GRAB)
+    // ACTION 0: MMB DRAG -> RESIZE BRUSH (RELAX, GRAB, OR PIN)
     // =========================================================================
     Int32 activeTool = GetActiveTool(doc, data);
     Bool isGrabTool = (activeTool == QUADDRAW_TOOL_GRAB);
+    Bool isPinTool = (activeTool == QUADDRAW_TOOL_PIN);
     Bool isRelaxResize = shiftPressed;
     Bool isGrabResize = (isGrabTool && !shiftPressed);
+    Bool isPinResize = (isPinTool && !shiftPressed);
 
-    if (channel == BFM_INPUT_MOUSEMIDDLE && (isGrabResize || isRelaxResize))
+    if (channel == BFM_INPUT_MOUSEMIDDLE && (isGrabResize || isRelaxResize || isPinResize))
     {
         Bool resizeGrab = isGrabResize;
-        Int32 radiusParam = resizeGrab ? QUADDRAW_GRAB_RADIUS : QUADDRAW_RELAX_RADIUS;
+        Bool resizePin  = isPinResize;
+        Int32 radiusParam = resizePin ? QUADDRAW_PIN_RADIUS : (resizeGrab ? QUADDRAW_GRAB_RADIUS : QUADDRAW_RELAX_RADIUS);
         Int32 strengthParam = resizeGrab ? QUADDRAW_GRAB_INTENSITY : QUADDRAW_RELAX_STRENGTH;
         Float defRadius = 50.0;
         Float defStrength = resizeGrab ? 1.0 : 0.35;
@@ -3338,7 +3671,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 }
             }
 
-            if (dy != 0.0)
+            if (dy != 0.0 && !resizePin)
             {
                 // Dragging mouse UP (-dy in screen coords) increases intensity, dragging DOWN decreases
                 currentStrength -= dy * 0.005;
@@ -3354,7 +3687,12 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             m_cursorX += dx;
             m_cursorY += dy;
 
-            if (resizeGrab)
+            if (resizePin)
+            {
+                StatusSetText(FormatString("QuadDraw [PIN BRUSH] | Radius: @ px (Left/Right)"_s,
+                    (Int32)(currentRadius + 0.5)));
+            }
+            else if (resizeGrab)
             {
                 StatusSetText(FormatString("QuadDraw [GRAB BRUSH] | Radius: @ px (Left/Right) | Intensity: @% (Up/Down)"_s,
                     (Int32)(currentRadius + 0.5), (Int32)(currentStrength * 100.0 + 0.5)));
@@ -3399,7 +3737,12 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                     toolData->SetFloat(strengthParam, currentStrength);
                 }
             }
-            if (resizeGrab)
+            if (resizePin)
+            {
+                StatusSetText(FormatString("QuadDraw [PIN]: Radius: @ px"_s,
+                    (Int32)(currentRadius + 0.5)));
+            }
+            else if (resizeGrab)
             {
                 StatusSetText(FormatString("QuadDraw [GRAB]: Radius: @ px | Intensity: @%"_s,
                     (Int32)(currentRadius + 0.5), (Int32)(currentStrength * 100.0 + 0.5)));
@@ -3420,7 +3763,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // =========================================================================
     // ACTION 0B: MMB -> EXTRUDE HIGHLIGHTED/SELECTED BORDER EDGE OR EDGE LOOP
     // =========================================================================
-    if (channel == BFM_INPUT_MOUSEMIDDLE && !shiftPressed && !isGrabTool)
+    if (channel == BFM_INPUT_MOUSEMIDDLE && !shiftPressed && !isGrabTool && !isPinTool)
     {
         PolygonObject* retopo = GetEditableMesh(doc, true);
         if (!retopo) return false;
@@ -3681,7 +4024,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // ==========================================
     // ACTION 2: CTRL (alone) + LMB -> COMPONENT LOOP (SELECT / EXTRUDE / MOVE)
     // ==========================================
-    if ((qualifier & QCTRL) && !(qualifier & QSHIFT) && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE && activeTool != QUADDRAW_TOOL_DELETE)
+    if ((qualifier & QCTRL) && !(qualifier & QSHIFT) && activeTool != QUADDRAW_TOOL_MULTICUT && activeTool != QUADDRAW_TOOL_KNIFE && activeTool != QUADDRAW_TOOL_DELETE && activeTool != QUADDRAW_TOOL_PIN)
     {
         // If m_componentLoop was not detected yet (e.g. rapid click), detect on the spot
         if (m_componentLoop.type == ComponentLoopType::None)
@@ -4282,7 +4625,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_cursorY = my;
 
         // Perform initial relaxation step at click position
-        m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly);
+        m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly, GetMeshPinnedSelection(retopo));
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
 
         BaseContainer device;
@@ -4297,7 +4640,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             m_cursorX = mx;
             m_cursorY = my;
 
-            m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly);
+            m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly, GetMeshPinnedSelection(retopo));
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         }
 
@@ -4326,6 +4669,14 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     if (activeTool == QUADDRAW_TOOL_GRAB && !m_ctrlHeld && !m_shiftHeld)
     {
         return DoGrabBrushDrag(doc, data, bd, win, retopo, target, mx, my);
+    }
+
+    // ==========================================
+    // ACTION 3D: PIN TOOL (ACTIVE TOOL == PIN) + LMB DRAG / CLICK
+    // ==========================================
+    if (activeTool == QUADDRAW_TOOL_PIN && !m_shiftHeld)
+    {
+        return DoPinDrag(doc, data, bd, win, retopo, target, mx, my, m_ctrlHeld);
     }
 
     // ==========================================
@@ -4391,6 +4742,11 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // Priority 1: Vertex Drag
     if (hitV != NOTOK)
     {
+        if (IsVertexPinned(retopo, hitV))
+        {
+            StatusSetText(FormatString("QuadDraw: Vertex #@ is pinned and protected from movement."_s, hitV));
+            return true;
+        }
         Vector initVertexPos = retopo->GetMg() * retopo->GetPointR()[hitV];
         Vector vScreen = bd->WS(initVertexPos);
         if (vScreen.z <= 0.0) return true;
@@ -4573,6 +4929,15 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 return DoExtrudeEdgeDrag(doc, data, bd, win, retopo, target, v0, v1, mx, my, KEY_MLEFT);
             }
         }
+
+        Bool v0Pinned = IsVertexPinned(retopo, v0);
+        Bool v1Pinned = IsVertexPinned(retopo, v1);
+        if (v0Pinned && v1Pinned)
+        {
+            StatusSetText("QuadDraw: Both edge vertices are pinned and protected from movement."_s);
+            return true;
+        }
+
         Vector initP0 = retopo->GetMg() * retopo->GetPointR()[v0];
         Vector initP1 = retopo->GetMg() * retopo->GetPointR()[v1];
         Vector s0 = bd->WS(initP0);
@@ -4730,8 +5095,11 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                     }
                 }
 
-                m_builder.SetVertexPosition(retopo, v0, p0);
-                m_builder.SetVertexPosition(retopo, v1, p1);
+                if (v0Pinned) weldTarget0 = NOTOK;
+                if (v1Pinned) weldTarget1 = NOTOK;
+
+                if (!v0Pinned) m_builder.SetVertexPosition(retopo, v0, p0);
+                if (!v1Pinned) m_builder.SetVertexPosition(retopo, v1, p1);
 
                 m_weldTargetIdx = weldTarget0;
                 m_weldTargetIdx2 = weldTarget1;
@@ -4935,7 +5303,8 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             {
                 for (Int32 k = 0; k < numPts; ++k)
                 {
-                    m_builder.SetVertexPosition(retopo, polyPts[k], newPts[k]);
+                    if (!IsVertexPinned(retopo, polyPts[k]))
+                        m_builder.SetVertexPosition(retopo, polyPts[k], newPts[k]);
                 }
                 StatusSetText(FormatString("QuadDraw: Moving polygon #@"_s, hitPoly));
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
@@ -5558,6 +5927,45 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                     bd->DrawLine(p0, p1, 0);
                 }
             }
+        }
+
+        bd->SetMatrix_Matrix(nullptr, Matrix());
+    }
+
+    // 2d. Draw Pin Brush circle when in Pin Tool mode (or during Pin brush resize / drag)
+    if (activeTool == QUADDRAW_TOOL_PIN && !m_pieMenu.active && (m_isResizingBrush || !m_shiftHeld))
+    {
+        Float pinRadius = data.GetFloat(QUADDRAW_PIN_RADIUS, 50.0);
+        Vector pinColor = data.GetVector(QUADDRAW_PIN_COLOR, Vector(0.0, 0.85, 1.0));
+        Float cx = m_isResizingBrush ? m_brushResizeCenterX : m_cursorX;
+        Float cy = m_isResizingBrush ? m_brushResizeCenterY : m_cursorY;
+
+        bd->SetMatrix_Screen();
+        Vector circleColor = m_ctrlHeld ? Vector(1.0, 0.3, 0.3) : pinColor;
+        if (m_isResizingBrush) circleColor = Vector(1.0, 1.0, 1.0);
+        bd->SetPen(circleColor);
+
+        const Int32 numSegs = 48;
+        for (Int32 i = 0; i < numSegs; ++i)
+        {
+            Float a0 = (Float)i * (2.0 * PI / (Float)numSegs);
+            Float a1 = (Float)(i + 1) * (2.0 * PI / (Float)numSegs);
+            Vector p0(cx + cos(a0) * pinRadius, cy + sin(a0) * pinRadius, 0.0);
+            Vector p1(cx + cos(a1) * pinRadius, cy + sin(a1) * pinRadius, 0.0);
+            bd->DrawLine(p0, p1, 0);
+        }
+
+        // Center crosshair
+        bd->SetPen(circleColor);
+        bd->DrawLine(Vector(cx - 5.0, cy, 0.0), Vector(cx + 5.0, cy, 0.0), 0);
+        bd->DrawLine(Vector(cx, cy - 5.0, 0.0), Vector(cx, cy + 5.0, 0.0), 0);
+
+        if (m_isResizingBrush)
+        {
+            // Horizontal radius indicator line (Left / Right)
+            bd->SetPen(circleColor);
+            bd->DrawLine(Vector(cx, cy, 0.0), Vector(cx + pinRadius, cy, 0.0), 0);
+            bd->DrawLine(Vector(cx + pinRadius, cy - 4.0, 0.0), Vector(cx + pinRadius, cy + 4.0, 0.0), 0);
         }
 
         bd->SetMatrix_Matrix(nullptr, Matrix());
@@ -6277,6 +6685,12 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 // Hovered polygon vertex in highlight color
                 drawPoint(wPos, highlightColor, pointSize + 2.0, disableXRay, toCam);
             }
+            else if (IsVertexPinned(retopo, i))
+            {
+                // Pinned vertex in custom pin color with distinct size
+                Vector pinCol = data.GetVector(QUADDRAW_PIN_COLOR, Vector(0.0, 0.85, 1.0));
+                drawPoint(wPos, pinCol, pointSize + 2.5, disableXRay, toCam);
+            }
             else
             {
                 // Standard retopo dot in wire color
@@ -6311,10 +6725,10 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
 void QuadDrawToolData::PieMenuState::Init()
 {
-    // 5 equal slices: 360 / 5 = 72 deg each.
+    // 6 equal slices: 360 / 6 = 60 deg each.
     // Sector 0 is centered at Top (North: 270 deg / -90 deg).
-    // Angular range for Sector 0: [234 deg, 306 deg], midpoint = 270 deg.
-    // Each subsequent sector is shifted by +72 deg clockwise.
+    // Angular range for Sector 0: [240 deg, 300 deg], midpoint = 270 deg.
+    // Each subsequent sector is shifted by +60 deg clockwise.
 
     // Item 0: Top (North) -> Extrude (Quad)
     items[0].toolId = QUADDRAW_TOOL_QUAD;
@@ -6334,24 +6748,30 @@ void QuadDrawToolData::PieMenuState::Init()
     items[2].subtitle = "Tweak Components"_s;
     items[2].accentColor = Vector(0.25, 0.65, 1.0); // Cyan / Blue
 
-    // Item 3: Bottom-Left (South-West) -> Multi-Cut
+    // Item 3: Bottom (South) -> Multi-Cut
     items[3].toolId = QUADDRAW_TOOL_MULTICUT;
     items[3].title = "Multi-Cut"_s;
     items[3].subtitle = "Cut & Slice"_s;
     items[3].accentColor = Vector(1.0, 0.75, 0.2); // Amber / Yellow
 
-    // Item 4: Top-Left (North-West) -> Delete
-    items[4].toolId = QUADDRAW_TOOL_DELETE;
-    items[4].title = "Delete"_s;
-    items[4].subtitle = "Delete Elements"_s;
-    items[4].accentColor = Vector(1.0, 0.3, 0.3); // Red
+    // Item 4: Bottom-Left (South-West) -> Pin Tool
+    items[4].toolId = QUADDRAW_TOOL_PIN;
+    items[4].title = "Pin Tool"_s;
+    items[4].subtitle = "Lock & Freeze"_s;
+    items[4].accentColor = Vector(0.0, 0.85, 1.0); // Electric Cyan
+
+    // Item 5: Top-Left (North-West) -> Delete
+    items[5].toolId = QUADDRAW_TOOL_DELETE;
+    items[5].title = "Delete"_s;
+    items[5].subtitle = "Delete Elements"_s;
+    items[5].accentColor = Vector(1.0, 0.3, 0.3); // Red
 
     const Float deg2rad = PI / 180.0;
     for (Int32 i = 0; i < ITEM_COUNT; ++i)
     {
-        Float startDeg = 234.0 + Float(i) * 72.0;
-        Float endDeg = startDeg + 72.0;
-        Float midDeg = startDeg + 36.0;
+        Float startDeg = 240.0 + Float(i) * 60.0;
+        Float endDeg = startDeg + 60.0;
+        Float midDeg = startDeg + 30.0;
 
         items[i].startAngleRad = startDeg * deg2rad;
         items[i].endAngleRad = endDeg * deg2rad;
@@ -6377,9 +6797,9 @@ void QuadDrawToolData::UpdatePieMenuHover()
     if (deg < 0.0)
         deg += 360.0;
 
-    // Angle 0 is (1, 0) East. Sector 0 starts at 234 deg.
-    Float relDeg = std::fmod(deg - 234.0 + 360.0, 360.0);
-    Int32 idx = Int32(relDeg / 72.0);
+    // Angle 0 is (1, 0) East. Sector 0 starts at 240 deg.
+    Float relDeg = std::fmod(deg - 240.0 + 360.0, 360.0);
+    Int32 idx = Int32(relDeg / 60.0);
     if (idx >= 0 && idx < PieMenuState::ITEM_COUNT)
     {
         m_pieMenu.hoveredIndex = idx;
@@ -6841,6 +7261,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_weldTargetIdx2 = NOTOK;
         m_isResizingBrush = false;
         m_isRelaxDragging = false;
+        m_isPinDragging = false;
         m_pieMenu.active = false;
         m_pieMenu.hoveredIndex = NOTOK;
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);

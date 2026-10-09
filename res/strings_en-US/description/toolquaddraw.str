@@ -10,6 +10,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_MULTICUT          "Multi-Cut";
     QUADDRAW_TOOL_DELETE            "Delete";
     QUADDRAW_TOOL_GRAB              "Grab Brush";
+    QUADDRAW_TOOL_PIN               "Pin Tool";
     QUADDRAW_DELETE_UNCONNECTED     "Delete All Unconnected Points";
     QUADDRAW_SNAP_ALL_TO_SURFACE    "Snap All Points to Nearest Mesh";
 
@@ -50,4 +51,13 @@ STRINGTABLE toolquaddraw
     QUADDRAW_GRAB_FALLOFF_SPHERICAL "Spherical";
     QUADDRAW_GRAB_FALLOFF_SHARP     "Sharp";
     QUADDRAW_GRAB_VISIBLE_ONLY      "Visible Only";
+
+    QUADDRAW_GROUP_PIN              "Pin Tool Settings";
+    QUADDRAW_PIN_RADIUS             "Brush Radius (px)";
+    QUADDRAW_PIN_COLOR              "Pin Color";
+    QUADDRAW_PIN_VISIBLE_ONLY       "Visible Only";
+    QUADDRAW_PIN_BORDER             "Pin Border";
+    QUADDRAW_PIN_ALL                "Pin All";
+    QUADDRAW_UNPIN_ALL              "Unpin All";
+    QUADDRAW_INVERT_PINS            "Invert Pins";
 }

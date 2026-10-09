@@ -52,14 +52,22 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
         - **MMB Drag**: Interactively adjusts brush radius (horizontal drag) and intensity (vertical drag).
         - **Shift + LMB Drag**: Temporarily engages the Relax brush for quick smoothing without switching tools.
         - **Settings**: Configurable brush radius, intensity (1% to 100%), falloff profiles (Smooth Hermite, Linear, Spherical Dome, Sharp Spike), and Visible Only backface culling.
+      - **Pin Tool**: Autodesk Maya-style component locking & freeze tool to protect points/components from any unwanted transformations:
+        - **Protected Operations**: Pinned components are completely frozen and immune to Relax brush, Grab brush, Tweak drag (Vertex, Edge, Polygon, Loop drag), and Global Surface Snap (`Snap All Points to Nearest Mesh`).
+        - **LMB Drag / Click**: Paint-pin vertices within brush radius or click directly on vertices, edges, or polygons to pin them.
+        - **Ctrl + LMB Drag / Click**: Unpin painted or clicked components.
+        - **MMB Drag**: Interactively resize the Pin brush radius in the viewport.
+        - **Quick Actions**: One-click utility buttons in tool settings: `Pin Border Vertices`, `Pin All Vertices`, `Unpin All`, and `Invert Pins`.
+        - **Visual Feedback & Persistence**: Pinned vertices are highlighted in viewport in high-visibility electric cyan (customizable in settings) and persisted across sessions in the `.c4d` file via `QuadDrawTag` serialization.
       - **Delete All Unconnected Points Button**: A dedicated button in the **Tool Mode** settings to instantly clean up all isolated/free dots that are not connected to any polygon.
       - **Snap All Points to Nearest Mesh Button**: A dedicated button in the **Tool Mode** settings to instantly snap all vertices of the retopo mesh to the surface of the nearest reference mesh (or target mesh linked in the tag) using high-performance BVH spatial acceleration with full undo support.
-    - **Marking Menu / Pie Menu (`Hold Ctrl + Shift`)**: Hold **Ctrl + Shift** to open a radial Marking Menu directly under the cursor and switch tools instantly by gesture (Press & Flick):
+    - **Marking Menu / Pie Menu (`Hold Ctrl + Shift`)**: Hold **Ctrl + Shift** to open a 6-sector radial Marking Menu directly under the cursor and switch tools instantly by gesture (Press & Flick):
       - **Up (North)**: `Extrude (Quad)`
       - **Up-Right (North-East)**: `Grab Brush`
       - **Right (East)**: `Move / Tweak`
       - **Down (South)**: `Multi-Cut`
-      - **Left (West)**: `Delete`
+      - **Down-Left (South-West)**: `Pin Tool`
+      - **Up-Left (North-West)**: `Delete`
       - Releasing `Ctrl` or `Shift` (or clicking) commits the hovered tool. Releasing inside the center deadzone keeps the current tool unchanged.
 
 7. **Component Loop Highlighting, Drag Extrusion & Moving (Ctrl)**:
@@ -100,7 +108,10 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 | **Shift + MMB Drag** | Interactively adjust relax brush radius (horizontal) and strength (vertical) |
 | **LMB Drag (in Grab mode)** | Grab and soft-move vertices with falloff and intensity |
 | **MMB Drag (in Grab mode)** | Interactively adjust Grab brush radius (horizontal) and intensity (vertical) |
-| **Hold Ctrl + Shift** | Open radial Marking Menu (Pie Menu) for fast tool switching (Up: Extrude, Up-Right: Grab, Right: Move, Down: Multi-Cut, Left: Delete) |
+| **LMB Drag / Click (in Pin mode)** | Paint-pin vertices or click to pin vertices, edges, or polygons |
+| **Ctrl + LMB Drag / Click (in Pin mode)** | Unpin painted or clicked components |
+| **MMB Drag (in Pin mode)** | Interactively adjust Pin brush radius |
+| **Hold Ctrl + Shift** | Open 6-sector radial Marking Menu (Pie Menu) for fast tool switching (Up: Extrude, Up-Right: Grab, Right: Move, Down: Multi-Cut, Down-Left: Pin, Up-Left: Delete) |
 | **Enter / RMB / Double-Click** | Commit Multi-Cut cut (splits quads/triangles along cut chain) |
 | **Backspace / Delete** | Remove last placed point in Multi-Cut |
 | **Ctrl + Hover** | Highlight loop of components (in Multi-Cut: preview edge loop cut) |

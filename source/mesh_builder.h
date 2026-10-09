@@ -5,6 +5,7 @@
 #include "c4d_basedraw.h"
 #include "c4d_baseobject.h"
 #include "surface_snapper.h"
+#include "quaddraw_tag.h"
 
 namespace cinema
 {
@@ -258,7 +259,7 @@ public:
     Bool IsCursorNearBorder(PolygonObject* retopo, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, PolygonObject* target = nullptr, SurfaceSnapper* snapper = nullptr, Bool visibleOnly = true);
 
     // Relax vertices within brush radius in screen space (Laplacian smoothing constrained to target surface)
-    Bool RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder = false, Bool lockInterior = false, Bool visibleOnly = true);
+    Bool RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder = false, Bool lockInterior = false, Bool visibleOnly = true, const BaseSelect* pinnedVertices = nullptr);
 
     // Grab Brush: Structure storing initial state and weight of vertices in brush radius
     struct GrabVertexInfo
@@ -275,7 +276,8 @@ public:
     Bool CollectGrabVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd,
                              Float screenX, Float screenY, Float brushRadius, Float intensity,
                              Int32 falloffType, Bool visibleOnly,
-                             maxon::BaseArray<GrabVertexInfo>& outVertices, Vector& outGrabCenterWorld);
+                             maxon::BaseArray<GrabVertexInfo>& outVertices, Vector& outGrabCenterWorld,
+                             const BaseSelect* pinnedVertices = nullptr);
 
     // Topological edge and neighbor cache
     struct EdgeCacheEntry

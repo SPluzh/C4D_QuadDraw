@@ -11,8 +11,18 @@ enum
     QUADDRAW_TOOL_MULTICUT          = 2,
     QUADDRAW_TOOL_DELETE            = 4,
     QUADDRAW_TOOL_GRAB              = 5,
+    QUADDRAW_TOOL_PIN               = 6,
     QUADDRAW_DELETE_UNCONNECTED     = 2032,
     QUADDRAW_SNAP_ALL_TO_SURFACE    = 2033,
+
+    QUADDRAW_GROUP_PIN              = 2050,
+    QUADDRAW_PIN_RADIUS             = 2051,
+    QUADDRAW_PIN_COLOR              = 2052,
+    QUADDRAW_PIN_VISIBLE_ONLY       = 2053,
+    QUADDRAW_PIN_BORDER             = 2054,
+    QUADDRAW_PIN_ALL                = 2055,
+    QUADDRAW_UNPIN_ALL              = 2056,
+    QUADDRAW_INVERT_PINS            = 2057,
 
     QUADDRAW_GROUP_DISPLAY          = 2000,
     QUADDRAW_DISABLE_CUSTOM_SHADING = 2006,

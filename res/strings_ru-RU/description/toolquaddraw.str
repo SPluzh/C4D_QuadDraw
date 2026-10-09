@@ -10,6 +10,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_MULTICUT          "Мульти-разрез (Multi-Cut)";
     QUADDRAW_TOOL_DELETE            "Удаление (Delete)";
     QUADDRAW_TOOL_GRAB              "Кисть Grab (Захват)";
+    QUADDRAW_TOOL_PIN               "Фиксация (Pin Tool)";
     QUADDRAW_DELETE_UNCONNECTED     "Удалить все несоединенные точки";
     QUADDRAW_SNAP_ALL_TO_SURFACE    "Прилепить все точки к ближайшему мешу";
 
@@ -50,4 +51,13 @@ STRINGTABLE toolquaddraw
     QUADDRAW_GRAB_FALLOFF_SPHERICAL "Сферический (Spherical)";
     QUADDRAW_GRAB_FALLOFF_SHARP     "Острый (Sharp)";
     QUADDRAW_GRAB_VISIBLE_ONLY      "Только видимые";
+
+    QUADDRAW_GROUP_PIN              "Настройки Pin Tool (Фиксация)";
+    QUADDRAW_PIN_RADIUS             "Радиус кисти (px)";
+    QUADDRAW_PIN_COLOR              "Цвет заблокированных точек";
+    QUADDRAW_PIN_VISIBLE_ONLY       "Только видимые";
+    QUADDRAW_PIN_BORDER             "Закрепить границы (Border)";
+    QUADDRAW_PIN_ALL                "Закрепить всё";
+    QUADDRAW_UNPIN_ALL              "Снять все пины";
+    QUADDRAW_INVERT_PINS            "Инвертировать";
 }
