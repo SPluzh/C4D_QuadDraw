@@ -1526,7 +1526,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 }
                 else
                 {
-                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Edge (#@ - #@) | Target: @"_s : "QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Edge (#@ - #@) (Weld on drop) | Target: @"_s : "QuadDraw | LMB Drag: Move Edge (#@ - #@) (Weld on drop) | Target: @"_s,
                         polyEdge.v0, polyEdge.v1, targetName));
                 }
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -1607,7 +1607,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
                 }
                 else
                 {
-                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Edge (#@ - #@) | Target: @"_s : "QuadDraw | LMB Drag: Move Edge (#@ - #@) | Target: @"_s,
+                    StatusSetText(FormatString(activeTool == QUADDRAW_TOOL_MOVE ? "QuadDraw [MOVE] | LMB Drag: Move Edge (#@ - #@) (Weld on drop) | Target: @"_s : "QuadDraw | LMB Drag: Move Edge (#@ - #@) (Weld on drop) | Target: @"_s,
                         nearEdge.v0, nearEdge.v1, targetName));
                 }
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -4145,6 +4145,9 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         Vector s1 = bd->WS(initP1);
         if (s0.z <= 0.0 || s1.z <= 0.0) return true;
 
+        Bool isBoundaryV0 = m_builder.IsBoundaryOrIsolatedVertex(retopo, v0);
+        Bool isBoundaryV1 = m_builder.IsBoundaryOrIsolatedVertex(retopo, v1);
+
         BaseContainer device;
         win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
 
@@ -4154,6 +4157,9 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         Vector lastP0 = initP0, lastP1 = initP1;
         Vector lastNorm0(0.0, 1.0, 0.0), lastNorm1(0.0, 1.0, 0.0);
         const Float DRAG_THRESHOLD = 3.0;
+
+        Int32 weldTarget0 = NOTOK;
+        Int32 weldTarget1 = NOTOK;
 
         while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
         {
@@ -4173,6 +4179,8 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 m_activeDragMode = TweakMode::Edge;
                 m_dragEdgeV0 = v0;
                 m_dragEdgeV1 = v1;
+                m_weldTargetIdx = NOTOK;
+                m_weldTargetIdx2 = NOTOK;
             }
 
             Vector p0 = initP0, p1 = initP1;
@@ -4229,9 +4237,76 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
 
             if (hasP0 && hasP1)
             {
+                weldTarget0 = NOTOK;
+                weldTarget1 = NOTOK;
+                m_weldTargetIdx = NOTOK;
+                m_weldTargetIdx2 = NOTOK;
+
+                // Check weld target for v0
+                Vector curScreen0 = bd->WS(p0);
+                if (curScreen0.z > 0.0 && isBoundaryV0)
+                {
+                    Int32 candWeld0 = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen0.x, curScreen0.y, 12.0, v0, target);
+                    if (candWeld0 != NOTOK && candWeld0 != v0 && candWeld0 != v1 &&
+                        m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld0))
+                    {
+                        Vector targetPos0 = retopo->GetMg() * retopo->GetPointR()[candWeld0];
+                        Vector targetScreen0 = bd->WS(targetPos0);
+
+                        Float maxDepthDiff0 = maxon::Max(Float(6.0), Float(curScreen0.z * 0.015));
+                        Bool depthOk0 = (std::abs(targetScreen0.z - curScreen0.z) <= maxDepthDiff0);
+
+                        Vector sp0 = bd->SW(Vector(curScreen0.x, curScreen0.y, curScreen0.z));
+                        Vector sp1 = bd->SW(Vector(curScreen0.x + 12.0, curScreen0.y, curScreen0.z));
+                        Float maxWorldDist0 = (sp1 - sp0).GetLength() * 2.0;
+                        Bool distOk0 = ((targetPos0 - p0).GetLength() <= maxWorldDist0);
+
+                        if (depthOk0 && distOk0)
+                        {
+                            weldTarget0 = candWeld0;
+                            p0 = targetPos0;
+                        }
+                    }
+                }
+
+                // Check weld target for v1
+                Vector curScreen1 = bd->WS(p1);
+                if (curScreen1.z > 0.0 && isBoundaryV1)
+                {
+                    Int32 candWeld1 = m_snapper.FindNearestRetopoVertex(bd, retopo, curScreen1.x, curScreen1.y, 12.0, v1, target);
+                    if (candWeld1 != NOTOK && candWeld1 != v0 && candWeld1 != v1 && candWeld1 != weldTarget0 &&
+                        m_builder.IsBoundaryOrIsolatedVertex(retopo, candWeld1))
+                    {
+                        Vector targetPos1 = retopo->GetMg() * retopo->GetPointR()[candWeld1];
+                        Vector targetScreen1 = bd->WS(targetPos1);
+
+                        Float maxDepthDiff1 = maxon::Max(Float(6.0), Float(curScreen1.z * 0.015));
+                        Bool depthOk1 = (std::abs(targetScreen1.z - curScreen1.z) <= maxDepthDiff1);
+
+                        Vector sp0 = bd->SW(Vector(curScreen1.x, curScreen1.y, curScreen1.z));
+                        Vector sp1 = bd->SW(Vector(curScreen1.x + 12.0, curScreen1.y, curScreen1.z));
+                        Float maxWorldDist1 = (sp1 - sp0).GetLength() * 2.0;
+                        Bool distOk1 = ((targetPos1 - p1).GetLength() <= maxWorldDist1);
+
+                        if (depthOk1 && distOk1)
+                        {
+                            weldTarget1 = candWeld1;
+                            p1 = targetPos1;
+                        }
+                    }
+                }
+
                 m_builder.SetVertexPosition(retopo, v0, p0);
                 m_builder.SetVertexPosition(retopo, v1, p1);
-                StatusSetText(FormatString("QuadDraw: Moving edge (#@ - #@)"_s, v0, v1));
+
+                m_weldTargetIdx = weldTarget0;
+                m_weldTargetIdx2 = weldTarget1;
+
+                if (weldTarget0 != NOTOK || weldTarget1 != NOTOK)
+                    StatusSetText("QuadDraw: Moving edge (Release to weld into target vertex)"_s);
+                else
+                    StatusSetText(FormatString("QuadDraw: Moving edge (#@ - #@)"_s, v0, v1));
+
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
             }
         }
@@ -4243,18 +4318,76 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             if (dragResult == MOUSEDRAGRESULT::ESCAPE)
             {
                 doc->DoUndo(true);
+                m_hoverTweak.mode = TweakMode::None;
             }
             else
             {
-                StatusSetText(FormatString("QuadDraw: Edge (#@ - #@) moved."_s, v0, v1));
+                Int32 finalV0 = v0;
+                Int32 finalV1 = v1;
+
+                if (weldTarget0 != NOTOK && weldTarget1 != NOTOK)
+                {
+                    // Both endpoints need to weld. Weld the vertex with the higher source index first so the other source index is unaffected.
+                    if (v0 > v1)
+                    {
+                        m_builder.WeldVertices(retopo, v0, weldTarget0);
+                        Int32 adjWeldTarget0 = (weldTarget0 > v0) ? (weldTarget0 - 1) : weldTarget0;
+                        Int32 adjV1 = v1; // v1 < v0, unaffected
+                        Int32 adjWeldTarget1 = (weldTarget1 > v0) ? (weldTarget1 - 1) : weldTarget1;
+
+                        m_builder.WeldVertices(retopo, adjV1, adjWeldTarget1);
+                        finalV0 = (adjWeldTarget0 > adjV1) ? (adjWeldTarget0 - 1) : adjWeldTarget0;
+                        finalV1 = (adjWeldTarget1 > adjV1) ? (adjWeldTarget1 - 1) : adjWeldTarget1;
+                    }
+                    else
+                    {
+                        m_builder.WeldVertices(retopo, v1, weldTarget1);
+                        Int32 adjWeldTarget1 = (weldTarget1 > v1) ? (weldTarget1 - 1) : weldTarget1;
+                        Int32 adjV0 = v0; // v0 < v1, unaffected
+                        Int32 adjWeldTarget0 = (weldTarget0 > v1) ? (weldTarget0 - 1) : weldTarget0;
+
+                        m_builder.WeldVertices(retopo, adjV0, adjWeldTarget0);
+                        finalV1 = (adjWeldTarget1 > adjV0) ? (adjWeldTarget1 - 1) : adjWeldTarget1;
+                        finalV0 = (adjWeldTarget0 > adjV0) ? (adjWeldTarget0 - 1) : adjWeldTarget0;
+                    }
+                    StatusSetText("QuadDraw: Edge vertices welded!"_s);
+                }
+                else if (weldTarget0 != NOTOK && weldTarget0 != v0)
+                {
+                    m_builder.WeldVertices(retopo, v0, weldTarget0);
+                    finalV0 = (weldTarget0 > v0) ? (weldTarget0 - 1) : weldTarget0;
+                    finalV1 = (v1 > v0) ? (v1 - 1) : v1;
+                    StatusSetText("QuadDraw: Vertex welded!"_s);
+                }
+                else if (weldTarget1 != NOTOK && weldTarget1 != v1)
+                {
+                    m_builder.WeldVertices(retopo, v1, weldTarget1);
+                    finalV1 = (weldTarget1 > v1) ? (weldTarget1 - 1) : weldTarget1;
+                    finalV0 = (v0 > v1) ? (v0 - 1) : v0;
+                    StatusSetText("QuadDraw: Vertex welded!"_s);
+                }
+                else
+                {
+                    StatusSetText(FormatString("QuadDraw: Edge (#@ - #@) moved."_s, v0, v1));
+                }
+
                 doc->EndUndo();
                 EventAdd();
 
-                m_hoverTweak.mode = TweakMode::Edge;
-                m_hoverTweak.edgeV0 = v0;
-                m_hoverTweak.edgeV1 = v1;
-                m_hoverTweak.edgeWorld0 = retopo->GetMg() * retopo->GetPointR()[v0];
-                m_hoverTweak.edgeWorld1 = retopo->GetMg() * retopo->GetPointR()[v1];
+                // Keep the edge highlighted if still valid
+                if (finalV0 >= 0 && finalV0 < retopo->GetPointCount() &&
+                    finalV1 >= 0 && finalV1 < retopo->GetPointCount() && finalV0 != finalV1)
+                {
+                    m_hoverTweak.mode = TweakMode::Edge;
+                    m_hoverTweak.edgeV0 = finalV0;
+                    m_hoverTweak.edgeV1 = finalV1;
+                    m_hoverTweak.edgeWorld0 = retopo->GetMg() * retopo->GetPointR()[finalV0];
+                    m_hoverTweak.edgeWorld1 = retopo->GetMg() * retopo->GetPointR()[finalV1];
+                }
+                else
+                {
+                    m_hoverTweak.mode = TweakMode::None;
+                }
             }
         }
 
@@ -4262,6 +4395,8 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_cursorY = my + totalDy;
         m_dragEdgeV0 = NOTOK;
         m_dragEdgeV1 = NOTOK;
+        m_weldTargetIdx = NOTOK;
+        m_weldTargetIdx2 = NOTOK;
         m_activeDragMode = TweakMode::None;
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
