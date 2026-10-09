@@ -3162,7 +3162,8 @@ static inline Float ClampMultiCutVal(Float val, Float minVal, Float maxVal)
 static Bool SegmentIntersect2D(
     const Vector& p0, const Vector& p1,
     const Vector& e0, const Vector& e1,
-    Float& outTE, Float& outTP)
+    Float& outTE, Float& outTP,
+    Bool infiniteP = false)
 {
     Float dpx = p1.x - p0.x;
     Float dpy = p1.y - p0.y;
@@ -3178,7 +3179,8 @@ static Bool SegmentIntersect2D(
     Float tP = (dx * dey - dy * dex) / denom;
     Float tE = (dx * dpy - dy * dpx) / denom;
 
-    if (tP >= -0.005 && tP <= 1.005 && tE >= 0.0 && tE <= 1.0)
+    Bool pValid = infiniteP ? true : (tP >= -0.02 && tP <= 1.02);
+    if (pValid && tE >= 0.0 && tE <= 1.0)
     {
         outTP = ClampMultiCutVal(tP, 0.0, 1.0);
         outTE = ClampMultiCutVal(tE, 0.0, 1.0);
@@ -3193,7 +3195,9 @@ MultiCutResult MeshBuilder::BuildSliceCut(
     PolygonObject* targetMesh,
     SurfaceSnapper& snapper,
     const Vector& screenP0,
-    const Vector& screenP1)
+    const Vector& screenP1,
+    Bool cutThrough,
+    Bool cutInfinite)
 {
     MultiCutResult res;
     if (!bd || !retopo) return res;
@@ -3240,11 +3244,17 @@ MultiCutResult MeshBuilder::BuildSliceCut(
         }
         if (!allValid) continue;
 
-        // Front-facing normal check
+        // Normal check: if cutThrough is false, only cut front-facing polygons
         Vector fn = Cross(w[1] - w[0], w[2] - w[0]);
-        Vector polyCenter = (w[0] + w[1] + w[2]) * (1.0 / 3.0);
-        Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
-        if (Dot(fn, toCam) <= 0.0) continue;
+        Float fnLen = fn.GetLength();
+        Vector approxN = (fnLen > 1e-4) ? (fn / fnLen) : Vector(0.0, 1.0, 0.0);
+
+        if (!cutThrough)
+        {
+            Vector polyCenter = (w[0] + w[1] + w[2]) * (1.0 / 3.0);
+            Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+            if (Dot(fn, toCam) <= 0.0) continue;
+        }
 
         // Test edges against screen line (screenP0, screenP1)
         maxon::BaseArray<HitInfo> hits;
@@ -3252,7 +3262,7 @@ MultiCutResult MeshBuilder::BuildSliceCut(
         {
             Int32 kNext = (k + 1) % N;
             Float tE = 0.5, tP = 0.5;
-            if (SegmentIntersect2D(screenP0, screenP1, s[k], s[kNext], tE, tP))
+            if (SegmentIntersect2D(screenP0, screenP1, s[k], s[kNext], tE, tP, cutInfinite))
             {
                 HitInfo hit;
                 hit.edgeIdx = k;
@@ -3280,7 +3290,6 @@ MultiCutResult MeshBuilder::BuildSliceCut(
                     Vector midPos = (1.0 - tE) * w[k] + tE * w[kNext];
                     if (targetMesh)
                     {
-                        Vector approxN = fn.GetNormalized();
                         SnapResult snap = snapper.ProjectPointAlongNormal(targetMesh, midPos, approxN, 50.0);
                         if (snap.valid) midPos = snap.worldPos;
                     }
@@ -3452,7 +3461,7 @@ MultiCutResult MeshBuilder::BuildMultiCutFromPoints(
             // Intermediate traversal via screen-space slice
             Vector sA = bd->WS(ptA.worldPos);
             Vector sB = bd->WS(ptB.worldPos);
-            MultiCutResult slice = BuildSliceCut(bd, retopo, targetMesh, snapper, sA, sB);
+            MultiCutResult slice = BuildSliceCut(bd, retopo, targetMesh, snapper, sA, sB, false, false);
             for (Int32 sc = 0; sc < (Int32)slice.cuts.GetCount(); ++sc)
             {
                 res.cuts.Append(slice.cuts[sc]) iferr_ignore("Append slice cut");

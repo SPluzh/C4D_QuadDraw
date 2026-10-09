@@ -23,6 +23,8 @@ STRINGTABLE toolquaddraw
 
     QUADDRAW_GROUP_INTERACTIVE      "Интерактивные настройки";
     QUADDRAW_BORDER_EXTRUDE_LMB     "Экструдирование граничных рёбер (перетаскивание ЛКМ)";
+    QUADDRAW_CUT_THROUGH            "Резать насквозь (обе стороны)";
+    QUADDRAW_CUT_INFINITE           "Бесконечный разрез";
     QUADDRAW_PREVIEW_COLOR          "Цвет превью квада (Shift)";
     QUADDRAW_CUT_COLOR              "Цвет разреза петли (Нож)";
     QUADDRAW_HIGHLIGHT_COLOR        "Цвет подсветки при наведении";

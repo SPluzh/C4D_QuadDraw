@@ -134,6 +134,8 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     data.SetFloat(QUADDRAW_POINT_SIZE, 6.0);
 
     data.SetBool(QUADDRAW_BORDER_EXTRUDE_LMB, true);
+    data.SetBool(QUADDRAW_CUT_THROUGH, true);
+    data.SetBool(QUADDRAW_CUT_INFINITE, false);
     data.SetVector(QUADDRAW_PREVIEW_COLOR, Vector(0.15, 0.85, 0.45));
     data.SetVector(QUADDRAW_CUT_COLOR, Vector(0.2, 1.0, 0.4));
     data.SetVector(QUADDRAW_HIGHLIGHT_COLOR, defaultHighlightColor);
@@ -1417,7 +1419,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         }
         else
         {
-            StatusSetText("QuadDraw [KNIFE] | Hover over Edge or Quad to Insert Edge Loop (LMB) | Drag to Slide"_s);
+            StatusSetText("QuadDraw [KNIFE] | Hover over Edge or Quad to Insert Edge Loop (LMB) | Drag to Slide / Slice Cut"_s);
         }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -3540,8 +3542,75 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         }
         else
         {
-            StatusSetText("QuadDraw [KNIFE]: No edge or quad loop detected under cursor to cut."_s);
-            return true;
+            // If not hovering over an edge loop, allow LMB Drag to Slice Cut across polygons
+            Float startX = mx, startY = my;
+            BaseContainer device;
+            win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+            Float dx, dy;
+            Bool isDrag = false;
+            while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+            {
+                if (dx == 0.0 && dy == 0.0) continue;
+                mx += dx;
+                my += dy;
+
+                Float dragDist = std::sqrt((mx - startX) * (mx - startX) + (my - startY) * (my - startY));
+                if (dragDist > 6.0)
+                {
+                    isDrag = true;
+                    m_sliceDrag.active = true;
+                    m_sliceDrag.startX = startX;
+                    m_sliceDrag.startY = startY;
+                    m_sliceDrag.currX = mx;
+                    m_sliceDrag.currY = my;
+
+                    Bool cutThrough = data.GetBool(QUADDRAW_CUT_THROUGH, true);
+                    Bool cutInfinite = data.GetBool(QUADDRAW_CUT_INFINITE, false);
+                    m_sliceDrag.result = m_builder.BuildSliceCut(bd, retopo, target, m_snapper, Vector(startX, startY, 0.0), Vector(mx, my, 0.0), cutThrough, cutInfinite);
+                    Int32 cutCount = (Int32)m_sliceDrag.result.cuts.GetCount();
+                    StatusSetText(FormatString("QuadDraw [KNIFE SLICE] | Slicing @ polygons | Release LMB to cut | Esc to cancel"_s, cutCount));
+                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                }
+            }
+
+            MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+            if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+            {
+                m_sliceDrag.active = false;
+                m_sliceDrag.result.valid = false;
+                m_sliceDrag.result.cuts.Reset();
+                m_sliceDrag.result.previewSegments.Reset();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+
+            if (isDrag && m_sliceDrag.active)
+            {
+                if (m_sliceDrag.result.valid && m_sliceDrag.result.cuts.GetCount() > 0)
+                {
+                    doc->StartUndo();
+                    doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+                    Int32 count = (Int32)m_sliceDrag.result.cuts.GetCount();
+                    if (m_builder.ApplyPolygonCuts(retopo, target, m_snapper, m_sliceDrag.result.cuts))
+                    {
+                        StatusSetText(FormatString("QuadDraw [KNIFE]: Sliced @ polygons."_s, count));
+                    }
+                    doc->EndUndo();
+                    EventAdd();
+                }
+                m_sliceDrag.active = false;
+                m_sliceDrag.result.valid = false;
+                m_sliceDrag.result.cuts.Reset();
+                m_sliceDrag.result.previewSegments.Reset();
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                return true;
+            }
+            else
+            {
+                StatusSetText("QuadDraw [KNIFE]: No edge or quad loop detected under cursor to cut."_s);
+                return true;
+            }
         }
     }
 
@@ -3703,7 +3772,9 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 m_sliceDrag.currX = mx;
                 m_sliceDrag.currY = my;
 
-                m_sliceDrag.result = m_builder.BuildSliceCut(bd, retopo, target, m_snapper, Vector(startX, startY, 0.0), Vector(mx, my, 0.0));
+                Bool cutThrough = data.GetBool(QUADDRAW_CUT_THROUGH, true);
+                Bool cutInfinite = data.GetBool(QUADDRAW_CUT_INFINITE, false);
+                m_sliceDrag.result = m_builder.BuildSliceCut(bd, retopo, target, m_snapper, Vector(startX, startY, 0.0), Vector(mx, my, 0.0), cutThrough, cutInfinite);
                 Int32 cutCount = (Int32)m_sliceDrag.result.cuts.GetCount();
                 StatusSetText(FormatString("QuadDraw [MULTI-CUT SLICE] | Slicing @ polygons | Release LMB to cut | Esc to cancel"_s, cutCount));
                 DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -5052,7 +5123,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
     // 3A2. Draw Multi-Cut Preview (Placed points, cut path, candidate hover, and slice drag)
     Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
-    if (activeTool == QUADDRAW_TOOL_MULTICUT && !m_ctrlHeld)
+    if ((activeTool == QUADDRAW_TOOL_MULTICUT || activeTool == QUADDRAW_TOOL_KNIFE) && !m_ctrlHeld)
     {
         // 1. Draw Slice Drag if active
         if (m_sliceDrag.active)
@@ -5061,9 +5132,31 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
             bd->SetTransparency(0);
             bd->SetPen(Vector(1.0, 1.0, 0.2));
-            Vector pA = bd->SW(Vector(m_sliceDrag.startX, m_sliceDrag.startY, 500.0));
-            Vector pB = bd->SW(Vector(m_sliceDrag.currX, m_sliceDrag.currY, 500.0));
-            bd->DrawLine(pA, pB, 0);
+            if (data.GetBool(QUADDRAW_CUT_INFINITE, false))
+            {
+                Float dirX = m_sliceDrag.currX - m_sliceDrag.startX;
+                Float dirY = m_sliceDrag.currY - m_sliceDrag.startY;
+                Float len = std::sqrt(dirX * dirX + dirY * dirY);
+                if (len > 1.0)
+                {
+                    Float ext = 4000.0;
+                    Vector pInfA = bd->SW(Vector(m_sliceDrag.startX - (dirX / len) * ext, m_sliceDrag.startY - (dirY / len) * ext, 500.0));
+                    Vector pInfB = bd->SW(Vector(m_sliceDrag.currX + (dirX / len) * ext, m_sliceDrag.currY + (dirY / len) * ext, 500.0));
+                    bd->DrawLine(pInfA, pInfB, 0);
+                }
+                else
+                {
+                    Vector pA = bd->SW(Vector(m_sliceDrag.startX, m_sliceDrag.startY, 500.0));
+                    Vector pB = bd->SW(Vector(m_sliceDrag.currX, m_sliceDrag.currY, 500.0));
+                    bd->DrawLine(pA, pB, 0);
+                }
+            }
+            else
+            {
+                Vector pA = bd->SW(Vector(m_sliceDrag.startX, m_sliceDrag.startY, 500.0));
+                Vector pB = bd->SW(Vector(m_sliceDrag.currX, m_sliceDrag.currY, 500.0));
+                bd->DrawLine(pA, pB, 0);
+            }
 
             // Draw 3D cut segments on intersected polygons
             bd->SetPen(cutColor);
@@ -5075,7 +5168,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
                 drawPoint(seg.p1, cutColor, pointSize + 1.5, disableXRay);
             }
         }
-        else
+        else if (activeTool == QUADDRAW_TOOL_MULTICUT)
         {
             Int32 ptCount = (Int32)m_multiCutPoints.GetCount();
             bd->SetTransparency(0);

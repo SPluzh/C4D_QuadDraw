@@ -30,6 +30,8 @@ CONTAINER toolquaddraw
             DEFAULT 1;
 
             BOOL  QUADDRAW_BORDER_EXTRUDE_LMB { }
+            BOOL  QUADDRAW_CUT_THROUGH        { }
+            BOOL  QUADDRAW_CUT_INFINITE       { }
             COLOR QUADDRAW_PREVIEW_COLOR      { }
             COLOR QUADDRAW_CUT_COLOR          { }
             COLOR QUADDRAW_HIGHLIGHT_COLOR    { }

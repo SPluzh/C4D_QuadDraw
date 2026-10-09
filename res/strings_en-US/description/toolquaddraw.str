@@ -23,6 +23,8 @@ STRINGTABLE toolquaddraw
 
     QUADDRAW_GROUP_INTERACTIVE      "Interactive Settings";
     QUADDRAW_BORDER_EXTRUDE_LMB     "Extrude Border Edges (LMB Drag)";
+    QUADDRAW_CUT_THROUGH            "Cut Through (Backfaces)";
+    QUADDRAW_CUT_INFINITE           "Infinite Slice Cut";
     QUADDRAW_PREVIEW_COLOR          "Quad Preview Color (Shift)";
     QUADDRAW_CUT_COLOR              "Cut Loop Color (Knife)";
     QUADDRAW_HIGHLIGHT_COLOR        "Hover Highlight Color";

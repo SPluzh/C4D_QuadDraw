@@ -243,7 +243,7 @@ public:
     MultiCutResult BuildMultiCutFromPoints(BaseDraw* bd, PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const maxon::BaseArray<MultiCutPoint>& points, const MultiCutPoint* candidateHover = nullptr);
 
     // Multi-Cut: Trace screen-space slice cut across retopo polygons from screenP0 to screenP1
-    MultiCutResult BuildSliceCut(BaseDraw* bd, PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const Vector& screenP0, const Vector& screenP1);
+    MultiCutResult BuildSliceCut(BaseDraw* bd, PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const Vector& screenP0, const Vector& screenP1, Bool cutThrough = true, Bool cutInfinite = false);
 
     // Multi-Cut: Apply polygon cuts to retopo mesh, splitting quads and triangles cleanly
     Bool ApplyPolygonCuts(PolygonObject* retopo, PolygonObject* targetMesh, SurfaceSnapper& snapper, const maxon::BaseArray<PolygonCut>& cuts);
