@@ -4,7 +4,7 @@
 #include "c4d.h"
 #include "description/tquaddraw.h"
 
-#define PLUGIN_ID_QUADDRAW_TAG 1067829
+#define PLUGIN_ID_QUADDRAW_TAG 1071076
 
 namespace cinema
 {

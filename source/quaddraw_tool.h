@@ -7,7 +7,7 @@
 #include "mesh_builder.h"
 #include "quaddraw_tag.h"
 
-#define PLUGIN_ID_QUADDRAW 1067828
+#define PLUGIN_ID_QUADDRAW 1070823
 
 namespace cinema
 {
