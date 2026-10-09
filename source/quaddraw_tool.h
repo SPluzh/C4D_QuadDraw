@@ -223,6 +223,8 @@ private:
         maxon::String title;
         maxon::String subtitle;
         Float         angleRad = 0.0;
+        Float         startAngleRad = 0.0;
+        Float         endAngleRad = 0.0;
         Vector        accentColor = Vector(1.0);
     };
 

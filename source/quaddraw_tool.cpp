@@ -857,11 +857,11 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
 
         if (m_pieMenu.hoveredIndex != NOTOK)
         {
-            StatusSetText(FormatString("QuadDraw [MARKING MENU] | Hover: @ | Release Ctrl+Shift to select"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
+            StatusSetText(FormatString("QuadDraw [PIE MENU] | Hover: @ | Release Ctrl+Shift to select"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
         }
         else
         {
-            StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Up-Right=Grab, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
+            StatusSetText("QuadDraw [PIE MENU] | Hover circular segment | Release Ctrl+Shift to select"_s);
         }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -6311,40 +6311,52 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
 void QuadDrawToolData::PieMenuState::Init()
 {
-    // Item 0: Up (North, -90 deg) -> Extrude (Quad)
+    // 5 equal slices: 360 / 5 = 72 deg each.
+    // Sector 0 is centered at Top (North: 270 deg / -90 deg).
+    // Angular range for Sector 0: [234 deg, 306 deg], midpoint = 270 deg.
+    // Each subsequent sector is shifted by +72 deg clockwise.
+
+    // Item 0: Top (North) -> Extrude (Quad)
     items[0].toolId = QUADDRAW_TOOL_QUAD;
-    items[0].title = "Extrude (Quad)"_s;
+    items[0].title = "Extrude"_s;
     items[0].subtitle = "Quads & Extrude"_s;
-    items[0].angleRad = -PI * 0.5;
     items[0].accentColor = Vector(0.15, 0.85, 0.45); // Mint Green
 
-    // Item 1: Up-Right (North-East, -45 deg) -> Grab Brush
+    // Item 1: Top-Right (North-East) -> Grab Brush
     items[1].toolId = QUADDRAW_TOOL_GRAB;
     items[1].title = "Grab Brush"_s;
     items[1].subtitle = "Soft Move / Sculpt"_s;
-    items[1].angleRad = -PI * 0.25;
     items[1].accentColor = Vector(0.95, 0.55, 0.25); // Warm Amber / Orange
 
-    // Item 2: Right (East, 0 deg) -> Move / Tweak
+    // Item 2: Bottom-Right (South-East) -> Move / Tweak
     items[2].toolId = QUADDRAW_TOOL_MOVE;
     items[2].title = "Move / Tweak"_s;
     items[2].subtitle = "Tweak Components"_s;
-    items[2].angleRad = 0.0;
     items[2].accentColor = Vector(0.25, 0.65, 1.0); // Cyan / Blue
 
-    // Item 3: Down (South, +90 deg) -> Multi-Cut
+    // Item 3: Bottom-Left (South-West) -> Multi-Cut
     items[3].toolId = QUADDRAW_TOOL_MULTICUT;
     items[3].title = "Multi-Cut"_s;
     items[3].subtitle = "Cut & Slice"_s;
-    items[3].angleRad = PI * 0.5;
     items[3].accentColor = Vector(1.0, 0.75, 0.2); // Amber / Yellow
 
-    // Item 4: Left (West, 180 deg) -> Delete
+    // Item 4: Top-Left (North-West) -> Delete
     items[4].toolId = QUADDRAW_TOOL_DELETE;
     items[4].title = "Delete"_s;
     items[4].subtitle = "Delete Elements"_s;
-    items[4].angleRad = PI;
     items[4].accentColor = Vector(1.0, 0.3, 0.3); // Red
+
+    const Float deg2rad = PI / 180.0;
+    for (Int32 i = 0; i < ITEM_COUNT; ++i)
+    {
+        Float startDeg = 234.0 + Float(i) * 72.0;
+        Float endDeg = startDeg + 72.0;
+        Float midDeg = startDeg + 36.0;
+
+        items[i].startAngleRad = startDeg * deg2rad;
+        items[i].endAngleRad = endDeg * deg2rad;
+        items[i].angleRad = midDeg * deg2rad;
+    }
 }
 
 void QuadDrawToolData::UpdatePieMenuHover()
@@ -6353,7 +6365,7 @@ void QuadDrawToolData::UpdatePieMenuHover()
     Float dy = m_pieMenu.currentY - m_pieMenu.originY;
     Float distSq = dx * dx + dy * dy;
 
-    const Float deadzone = 20.0;
+    const Float deadzone = 26.0;
     if (distSq < deadzone * deadzone)
     {
         m_pieMenu.hoveredIndex = NOTOK;
@@ -6362,32 +6374,19 @@ void QuadDrawToolData::UpdatePieMenuHover()
 
     Float angle = std::atan2(dy, dx);
     Float deg = angle * (180.0 / PI);
+    if (deg < 0.0)
+        deg += 360.0;
 
-    // Cardinal + diagonal sectors:
-    // North: [-112.5, -67.5] -> 0: Extrude (Up)
-    // North-East: [-67.5, -22.5] -> 1: Grab Brush (Up-Right)
-    // East: [-22.5, 45.0] -> 2: Move / Tweak (Right)
-    // South: [45.0, 135.0] -> 3: Multi-Cut (Down)
-    // West: > 135.0 or < -112.5 -> 4: Delete (Left)
-    if (deg >= -112.5 && deg < -67.5)
+    // Angle 0 is (1, 0) East. Sector 0 starts at 234 deg.
+    Float relDeg = std::fmod(deg - 234.0 + 360.0, 360.0);
+    Int32 idx = Int32(relDeg / 72.0);
+    if (idx >= 0 && idx < PieMenuState::ITEM_COUNT)
     {
-        m_pieMenu.hoveredIndex = 0;
-    }
-    else if (deg >= -67.5 && deg < -22.5)
-    {
-        m_pieMenu.hoveredIndex = 1;
-    }
-    else if (deg >= -22.5 && deg < 45.0)
-    {
-        m_pieMenu.hoveredIndex = 2;
-    }
-    else if (deg >= 45.0 && deg < 135.0)
-    {
-        m_pieMenu.hoveredIndex = 3;
+        m_pieMenu.hoveredIndex = idx;
     }
     else
     {
-        m_pieMenu.hoveredIndex = 4;
+        m_pieMenu.hoveredIndex = NOTOK;
     }
 }
 
@@ -6405,33 +6404,64 @@ void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data, Int3
     Float curX = m_pieMenu.currentX;
     Float curY = m_pieMenu.currentY;
 
-    auto drawScreenQuad = [&](Float x1, Float y1, Float x2, Float y2, const Vector& col)
+    // Lambda: draw filled annular ring sector (donut slice) using triangles
+    auto drawAnnularSector = [&](Float cx, Float cy, Float rIn, Float rOut, Float aStart, Float aEnd, const Vector& fillColor, Int32 steps = 14)
     {
-        Vector pts[4] = {
-            Vector(x1, y1, 0.0),
-            Vector(x2, y1, 0.0),
-            Vector(x2, y2, 0.0),
-            Vector(x1, y2, 0.0)
-        };
-        Vector cols[4] = { col, col, col, col };
-        bd->DrawPolygon(pts, cols, true);
+        for (Int32 s = 0; s < steps; ++s)
+        {
+            Float a0 = aStart + (Float(s) / Float(steps)) * (aEnd - aStart);
+            Float a1 = aStart + (Float(s + 1) / Float(steps)) * (aEnd - aStart);
+
+            Float c0 = std::cos(a0), s0 = std::sin(a0);
+            Float c1 = std::cos(a1), s1 = std::sin(a1);
+
+            Vector pIn0(cx + c0 * rIn, cy + s0 * rIn, 0.0);
+            Vector pOut0(cx + c0 * rOut, cy + s0 * rOut, 0.0);
+            Vector pOut1(cx + c1 * rOut, cy + s1 * rOut, 0.0);
+            Vector pIn1(cx + c1 * rIn, cy + s1 * rIn, 0.0);
+
+            Vector tri1[3] = { pIn0, pOut0, pOut1 };
+            Vector triCol1[3] = { fillColor, fillColor, fillColor };
+            bd->DrawPolygon(tri1, triCol1, false);
+
+            Vector tri2[3] = { pIn0, pOut1, pIn1 };
+            Vector triCol2[3] = { fillColor, fillColor, fillColor };
+            bd->DrawPolygon(tri2, triCol2, false);
+        }
         bd->DrawArrayEnd();
     };
 
-    auto drawScreenFrame = [&](Float x1, Float y1, Float x2, Float y2, const Vector& col, Float thickness)
+    // Lambda: draw contour lines of an annular sector
+    auto drawAnnularSectorBorder = [&](Float cx, Float cy, Float rIn, Float rOut, Float aStart, Float aEnd, const Vector& borderColor, Float lineWidth, Int32 steps = 14)
     {
-        bd->SetPen(col);
-        bd->DrawLine2D(Vector(x1, y1, 0.0), Vector(x2, y1, 0.0));
-        bd->DrawLine2D(Vector(x2, y1, 0.0), Vector(x2, y2, 0.0));
-        bd->DrawLine2D(Vector(x2, y2, 0.0), Vector(x1, y2, 0.0));
-        bd->DrawLine2D(Vector(x1, y2, 0.0), Vector(x1, y1, 0.0));
-        if (thickness > 1.0)
+        bd->SetDrawParam(DRAW_PARAMETER_LINEWIDTH, GeData(lineWidth));
+        bd->SetPen(borderColor);
+
+        // Outer arc
+        for (Int32 s = 0; s < steps; ++s)
         {
-            bd->DrawLine2D(Vector(x1 - 1.0, y1 - 1.0, 0.0), Vector(x2 + 1.0, y1 - 1.0, 0.0));
-            bd->DrawLine2D(Vector(x2 + 1.0, y1 - 1.0, 0.0), Vector(x2 + 1.0, y2 + 1.0, 0.0));
-            bd->DrawLine2D(Vector(x2 + 1.0, y2 + 1.0, 0.0), Vector(x1 - 1.0, y2 + 1.0, 0.0));
-            bd->DrawLine2D(Vector(x1 - 1.0, y2 + 1.0, 0.0), Vector(x1 - 1.0, y1 - 1.0, 0.0));
+            Float a0 = aStart + (Float(s) / Float(steps)) * (aEnd - aStart);
+            Float a1 = aStart + (Float(s + 1) / Float(steps)) * (aEnd - aStart);
+            bd->DrawLine2D(Vector(cx + std::cos(a0) * rOut, cy + std::sin(a0) * rOut, 0.0),
+                           Vector(cx + std::cos(a1) * rOut, cy + std::sin(a1) * rOut, 0.0));
         }
+
+        // Inner arc
+        for (Int32 s = 0; s < steps; ++s)
+        {
+            Float a0 = aStart + (Float(s) / Float(steps)) * (aEnd - aStart);
+            Float a1 = aStart + (Float(s + 1) / Float(steps)) * (aEnd - aStart);
+            bd->DrawLine2D(Vector(cx + std::cos(a0) * rIn, cy + std::sin(a0) * rIn, 0.0),
+                           Vector(cx + std::cos(a1) * rIn, cy + std::sin(a1) * rIn, 0.0));
+        }
+
+        // Radial dividing edges
+        bd->DrawLine2D(Vector(cx + std::cos(aStart) * rIn, cy + std::sin(aStart) * rIn, 0.0),
+                       Vector(cx + std::cos(aStart) * rOut, cy + std::sin(aStart) * rOut, 0.0));
+        bd->DrawLine2D(Vector(cx + std::cos(aEnd) * rIn, cy + std::sin(aEnd) * rIn, 0.0),
+                       Vector(cx + std::cos(aEnd) * rOut, cy + std::sin(aEnd) * rOut, 0.0));
+
+        bd->SetDrawParam(DRAW_PARAMETER_LINEWIDTH, GeData(1.0));
     };
 
     auto drawScreenCircleFilled = [&](Float cx, Float cy, Float r, const Vector& col, Int32 segments)
@@ -6451,92 +6481,101 @@ void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data, Int3
         bd->DrawArrayEnd();
     };
 
-    // 1. Center hub (deadzone = 20px)
-    const Float deadzoneRadius = 20.0;
-    drawScreenCircleFilled(ox, oy, deadzoneRadius, Vector(0.12, 0.13, 0.16), 24);
-    bd->SetPen(Vector(0.38, 0.42, 0.48));
-    bd->DrawCircle2D((Int32)ox, (Int32)oy, deadzoneRadius);
 
-    // Crosshair at center
-    bd->SetPen(Vector(0.55, 0.6, 0.65));
-    bd->DrawLine2D(Vector(ox - 4.0, oy, 0.0), Vector(ox + 4.0, oy, 0.0));
-    bd->DrawLine2D(Vector(ox, oy - 4.0, 0.0), Vector(ox, oy + 4.0, 0.0));
+    // Radii & spacing
+    const Float deadzoneRadius = 26.0;
+    const Float baseInnerR = 36.0;
+    const Float baseOuterR = 112.0;
+    const Float hoverInnerR = 33.0;
+    const Float hoverOuterR = 125.0; // Pops out by 13px on hover
 
-    // 2. Direction pointer line from center to cursor (when outside deadzone)
-    Float vdx = curX - ox;
-    Float vdy = curY - oy;
-    Float dist = std::sqrt(vdx * vdx + vdy * vdy);
-    if (dist > deadzoneRadius)
-    {
-        Vector pointerCol = (m_pieMenu.hoveredIndex != NOTOK) ? m_pieMenu.items[m_pieMenu.hoveredIndex].accentColor : Vector(0.65, 0.65, 0.7);
-        bd->SetPen(pointerCol);
-        bd->DrawLine2D(Vector(ox, oy, 0.0), Vector(curX, curY, 0.0));
+    // Small angular gap between slices: 1.8 degrees
+    const Float gapRad = (1.8 * PI / 180.0) * 0.5;
 
-        // Cursor handle dot
-        drawScreenCircleFilled(curX, curY, 3.5, pointerCol, 12);
-    }
-
-    // 3. Render 5 radial tool cards
-    const Float distCard = 90.0;
-    const Float baseW = 106.0;
-    const Float baseH = 28.0;
-
+    // 1. Draw 5 circular segments (Fills and active indicators)
     for (Int32 i = 0; i < PieMenuState::ITEM_COUNT; ++i)
     {
         const PieMenuItem& item = m_pieMenu.items[i];
         Bool isHovered = (m_pieMenu.hoveredIndex == i);
         Bool isActiveTool = (item.toolId == activeTool);
 
-        Float cx = ox + std::cos(item.angleRad) * distCard;
-        Float cy = oy + std::sin(item.angleRad) * distCard;
-
-        Float hw = (isHovered ? baseW + 10.0 : baseW) * 0.5;
-        Float hh = (isHovered ? baseH + 6.0 : baseH) * 0.5;
-
-        Float x1 = cx - hw;
-        Float x2 = cx + hw;
-        Float y1 = cy - hh;
-        Float y2 = cy + hh;
+        Float rIn = isHovered ? hoverInnerR : baseInnerR;
+        Float rOut = isHovered ? hoverOuterR : baseOuterR;
+        Float aStart = item.startAngleRad + gapRad;
+        Float aEnd = item.endAngleRad - gapRad;
 
         Vector bgCol;
         if (isHovered)
         {
-            bgCol = Vector(0.18, 0.22, 0.26) + item.accentColor * 0.12;
+            bgCol = Vector(0.14, 0.16, 0.20) + item.accentColor * 0.22;
         }
         else if (isActiveTool)
         {
-            bgCol = Vector(0.12, 0.14, 0.18);
+            bgCol = Vector(0.11, 0.13, 0.17) + item.accentColor * 0.08;
         }
         else
         {
-            bgCol = Vector(0.08, 0.09, 0.11);
+            bgCol = Vector(0.09, 0.10, 0.13);
         }
 
-        drawScreenQuad(x1, y1, x2, y2, bgCol);
+        // Draw sector body
+        drawAnnularSector(ox, oy, rIn, rOut, aStart, aEnd, bgCol, 14);
 
+        // If active tool: draw illuminated inner arc strip
+        if (isActiveTool)
+        {
+            Vector activeStripCol = isHovered ? item.accentColor : item.accentColor * 0.85;
+            drawAnnularSector(ox, oy, rIn, rIn + 4.5, aStart, aEnd, activeStripCol, 12);
+        }
+    }
+
+    // 2. Draw Borders around segments
+    for (Int32 i = 0; i < PieMenuState::ITEM_COUNT; ++i)
+    {
+        const PieMenuItem& item = m_pieMenu.items[i];
+        Bool isHovered = (m_pieMenu.hoveredIndex == i);
+        Bool isActiveTool = (item.toolId == activeTool);
+
+        Float rIn = isHovered ? hoverInnerR : baseInnerR;
+        Float rOut = isHovered ? hoverOuterR : baseOuterR;
+        Float aStart = item.startAngleRad + gapRad;
+        Float aEnd = item.endAngleRad - gapRad;
+
+        Vector borderCol;
+        Float borderWidth = 1.0;
         if (isHovered)
         {
-            drawScreenFrame(x1, y1, x2, y2, item.accentColor, 2.0);
+            borderCol = item.accentColor;
+            borderWidth = 2.0;
         }
         else if (isActiveTool)
         {
-            drawScreenFrame(x1, y1, x2, y2, item.accentColor * 0.75, 1.5);
+            borderCol = item.accentColor * 0.65;
+            borderWidth = 1.2;
         }
         else
         {
-            drawScreenFrame(x1, y1, x2, y2, Vector(0.28, 0.30, 0.34), 1.0);
+            borderCol = Vector(0.24, 0.27, 0.31);
+            borderWidth = 1.0;
         }
 
-        // Connector line from center hub to card
-        Vector spokeCol = isHovered ? item.accentColor * 0.7 : (isActiveTool ? item.accentColor * 0.4 : Vector(0.22, 0.24, 0.28));
-        bd->SetPen(spokeCol);
-        Float spokeStartX = ox + std::cos(item.angleRad) * (deadzoneRadius + 2.0);
-        Float spokeStartY = oy + std::sin(item.angleRad) * (deadzoneRadius + 2.0);
-        Float spokeEndX = cx - std::cos(item.angleRad) * (hw + 2.0);
-        Float spokeEndY = cy - std::sin(item.angleRad) * (hh + 2.0);
-        bd->DrawLine2D(Vector(spokeStartX, spokeStartY, 0.0), Vector(spokeEndX, spokeEndY, 0.0));
+        drawAnnularSectorBorder(ox, oy, rIn, rOut, aStart, aEnd, borderCol, borderWidth, 14);
+    }
 
-        // Label text
+    // 3. Draw Labels inside each segment
+    for (Int32 i = 0; i < PieMenuState::ITEM_COUNT; ++i)
+    {
+        const PieMenuItem& item = m_pieMenu.items[i];
+        Bool isHovered = (m_pieMenu.hoveredIndex == i);
+        Bool isActiveTool = (item.toolId == activeTool);
+
+        Float rIn = isHovered ? hoverInnerR : baseInnerR;
+        Float rOut = isHovered ? hoverOuterR : baseOuterR;
+        Float rText = (rIn + rOut) * 0.5;
+
+        Float tx = ox + std::cos(item.angleRad) * rText;
+        Float ty = oy + std::sin(item.angleRad) * rText;
+
         maxon::String labelText = item.title;
         if (isActiveTool)
         {
@@ -6544,13 +6583,52 @@ void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data, Int3
         }
 
         Int32 charCount = labelText.GetLength();
-        Int32 textX = (Int32)(cx - (charCount * 7.0) * 0.5);
-        Int32 textY = (Int32)(cy - 5.0);
+        Int32 textX = (Int32)(tx - (charCount * 6.5) * 0.5);
+        Int32 textY = (Int32)(ty - 5.0);
 
-        Vector textCol = isHovered ? Vector(1.0, 1.0, 1.0) : (isActiveTool ? item.accentColor : Vector(0.75, 0.78, 0.82));
+        Vector textCol;
+        if (isHovered)
+        {
+            textCol = Vector(1.0, 1.0, 1.0);
+        }
+        else if (isActiveTool)
+        {
+            textCol = item.accentColor;
+        }
+        else
+        {
+            textCol = Vector(0.78, 0.82, 0.88);
+        }
+
         bd->SetPen(textCol);
         bd->DrawHUDText(textX, textY, labelText);
     }
+
+    // 4. Center hub (deadzone = 26px)
+    drawScreenCircleFilled(ox, oy, deadzoneRadius, Vector(0.10, 0.11, 0.14), 28);
+    Vector hubBorderCol = (m_pieMenu.hoveredIndex != NOTOK) ? m_pieMenu.items[m_pieMenu.hoveredIndex].accentColor * 0.8 : Vector(0.32, 0.35, 0.40);
+    bd->SetPen(hubBorderCol);
+    bd->DrawCircle2D((Int32)ox, (Int32)oy, deadzoneRadius);
+
+    // Crosshair at center
+    bd->SetPen(Vector(0.50, 0.54, 0.60));
+    bd->DrawLine2D(Vector(ox - 3.5, oy, 0.0), Vector(ox + 3.5, oy, 0.0));
+    bd->DrawLine2D(Vector(ox, oy - 3.5, 0.0), Vector(ox, oy + 3.5, 0.0));
+
+    // 5. Direction pointer line from center to cursor (when outside deadzone)
+    Float vdx = curX - ox;
+    Float vdy = curY - oy;
+    Float dist = std::sqrt(vdx * vdx + vdy * vdy);
+    if (dist > deadzoneRadius)
+    {
+        Vector pointerCol = (m_pieMenu.hoveredIndex != NOTOK) ? m_pieMenu.items[m_pieMenu.hoveredIndex].accentColor : Vector(0.65, 0.65, 0.70);
+        bd->SetPen(pointerCol);
+        bd->DrawLine2D(Vector(ox, oy, 0.0), Vector(curX, curY, 0.0));
+
+        // Cursor handle dot
+        drawScreenCircleFilled(curX, curY, 3.5, pointerCol, 12);
+    }
+
 }
 
 Bool QuadDrawToolData::DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, Float mx, Float my)
@@ -6645,7 +6723,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_edgeCutPreview.valid = false;
         m_deleteHighlight.Reset();
 
-        StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Up-Right=Grab, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
+        StatusSetText("QuadDraw [PIE MENU] | Hover circular segment | Release Ctrl+Shift to select"_s);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
