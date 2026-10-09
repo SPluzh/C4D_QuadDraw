@@ -6,6 +6,7 @@
 #include "c4d_general.h"
 #include "c4d_gui.h"
 #include "gui.h"
+#include "quaddraw_bvh.h"
 
 namespace cinema
 {
@@ -267,6 +268,11 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
                     }
                     return true;
                 }
+                else if (dc->_descId[0].id == QUADDRAW_SNAP_ALL_TO_SURFACE)
+                {
+                    SnapAllPointsToNearestMesh(doc);
+                    return true;
+                }
             }
             break;
         }
@@ -391,6 +397,201 @@ PolygonObject* QuadDrawToolData::FindExistingRetopoMesh(BaseDocument* doc)
         return static_cast<PolygonObject*>(named);
 
     return nullptr;
+}
+
+static void AddCandidateMesh(PolygonObject* polyObj, const Matrix& mg, BaseObject* root,
+                             PolygonObject* retopo,
+                             maxon::BaseArray<const PolygonObject*>& candidateMeshes,
+                             maxon::BaseArray<Matrix>& candidateMatrices,
+                             maxon::BaseArray<BaseObject*>& candidateRoots)
+{
+    if (!polyObj || polyObj == retopo || polyObj->GetPointCount() <= 0 || polyObj->GetPolygonCount() <= 0)
+        return;
+    for (Int32 i = 0; i < (Int32)candidateMeshes.GetCount(); ++i)
+    {
+        if (candidateMeshes[i] == polyObj)
+            return;
+    }
+    candidateMeshes.Append(polyObj) iferr_ignore("Append candidate");
+    candidateMatrices.Append(mg) iferr_ignore("Append mg");
+    if (root)
+    {
+        Bool rootFound = false;
+        for (Int32 i = 0; i < (Int32)candidateRoots.GetCount(); ++i)
+        {
+            if (candidateRoots[i] == root) { rootFound = true; break; }
+        }
+        if (!rootFound)
+            candidateRoots.Append(root) iferr_ignore("Append root");
+    }
+}
+
+static void CollectCandidateMeshesRecursive(BaseObject* op, BaseObject* root,
+                                            PolygonObject* retopo,
+                                            maxon::BaseArray<const PolygonObject*>& candidateMeshes,
+                                            maxon::BaseArray<Matrix>& candidateMatrices,
+                                            maxon::BaseArray<BaseObject*>& candidateRoots)
+{
+    while (op)
+    {
+        if (op != retopo && op->GetEditorMode() != MODE_OFF && !op->GetTag(PLUGIN_ID_QUADDRAW_TAG))
+        {
+            BaseObject* curRoot = root ? root : op;
+            Matrix mg = op->GetMg();
+
+            if (op->IsInstanceOf(Opolygon))
+            {
+                AddCandidateMesh(static_cast<PolygonObject*>(op), mg, curRoot, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+            }
+
+            if (op->GetDeformCache())
+            {
+                BaseObject* defCache = op->GetDeformCache();
+                if (defCache->IsInstanceOf(Opolygon))
+                    AddCandidateMesh(static_cast<PolygonObject*>(defCache), mg, curRoot, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+                for (BaseObject* c = defCache->GetDown(); c; c = c->GetNext())
+                    CollectCandidateMeshesRecursive(c, curRoot, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+            }
+            else if (op->GetCache())
+            {
+                BaseObject* cache = op->GetCache();
+                if (cache->IsInstanceOf(Opolygon))
+                    AddCandidateMesh(static_cast<PolygonObject*>(cache), mg, curRoot, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+                for (BaseObject* c = cache->GetDown(); c; c = c->GetNext())
+                    CollectCandidateMeshesRecursive(c, curRoot, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+            }
+        }
+
+        CollectCandidateMeshesRecursive(op->GetDown(), root ? root : op, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+        op = op->GetNext();
+    }
+}
+
+Bool QuadDrawToolData::SnapAllPointsToNearestMesh(BaseDocument* doc)
+{
+    if (!doc) return false;
+
+    PolygonObject* retopo = GetEditableMesh(doc, false);
+    if (!retopo || retopo->GetPointCount() == 0)
+    {
+        StatusSetText("QuadDraw: No active retopo mesh points to snap"_s);
+        return false;
+    }
+
+    maxon::BaseArray<const PolygonObject*> candidateMeshes;
+    maxon::BaseArray<Matrix> candidateMatrices;
+    maxon::BaseArray<BaseObject*> candidateRoots;
+    String targetDescName;
+
+    // Check if target is explicitly linked in QuadDraw tag
+    BaseTag* tag = retopo->GetTag(PLUGIN_ID_QUADDRAW_TAG);
+    BaseObject* tagLinkedObj = nullptr;
+    if (tag)
+    {
+        GeData d;
+        if (tag->GetParameter(ConstDescIDLevel(QUADDRAW_TAG_TARGET), d, DESCFLAGS_GET::NONE))
+        {
+            const BaseLink* bl = d.GetBaseLink();
+            if (bl)
+            {
+                BaseList2D* linked = bl->GetLink(doc, 0);
+                if (linked && linked->IsInstanceOf(Obase))
+                {
+                    tagLinkedObj = static_cast<BaseObject*>(linked);
+                }
+            }
+        }
+    }
+
+    if (tagLinkedObj && tagLinkedObj != retopo)
+    {
+        CollectCandidateMeshesRecursive(tagLinkedObj, tagLinkedObj, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+        targetDescName = tagLinkedObj->GetName();
+    }
+    else
+    {
+        CollectCandidateMeshesRecursive(doc->GetFirstObject(), nullptr, retopo, candidateMeshes, candidateMatrices, candidateRoots);
+        if (candidateRoots.GetCount() > 0)
+        {
+            if (candidateRoots.GetCount() == 1)
+                targetDescName = candidateRoots[0]->GetName();
+            else
+                targetDescName = FormatString("@ mesh(es)"_s, candidateRoots.GetCount());
+        }
+    }
+
+    if (candidateMeshes.GetCount() == 0)
+    {
+        StatusSetText("QuadDraw: No target mesh found to snap to"_s);
+        return false;
+    }
+
+    // Auto-link single found target into the tag if tag had no target
+    if (tag && !tagLinkedObj && candidateRoots.GetCount() == 1 && candidateRoots[0])
+    {
+        BaseLink* bl = BaseLink::Alloc();
+        if (bl)
+        {
+            bl->SetLink(candidateRoots[0]);
+            tag->SetParameter(ConstDescIDLevel(QUADDRAW_TAG_TARGET), GeData(bl), DESCFLAGS_SET::NONE);
+            BaseLink::Free(bl);
+        }
+    }
+
+    // Build BVH in world space from all candidate meshes
+    TriangleBVH bvh;
+    if (!bvh.Build(candidateMeshes, candidateMatrices, Matrix()))
+    {
+        StatusSetText("QuadDraw: Failed to build BVH for target mesh"_s);
+        return false;
+    }
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+
+    Vector* ptsW = retopo->GetPointW();
+    const Vector* ptsR = retopo->GetPointR();
+    Int32 ptCount = retopo->GetPointCount();
+    Matrix retopoMg = retopo->GetMg();
+    Matrix invRetopoMg = ~retopoMg;
+
+    Int32 snappedCount = 0;
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        Vector pWorld = retopoMg * ptsR[i];
+        Vector closestPt(0.0);
+        Vector closestNorm(0.0, 1.0, 0.0);
+
+        if (bvh.FindClosestPoint(pWorld, closestPt, closestNorm))
+        {
+            Vector newLocalPos = invRetopoMg * closestPt;
+            if ((newLocalPos - ptsR[i]).GetSquaredLength() > 1e-8)
+            {
+                ptsW[i] = newLocalPos;
+                snappedCount++;
+            }
+        }
+    }
+
+    m_deleteHighlight.Reset();
+    m_shiftQuadPreview.valid = false;
+    m_edgeCutPreview.valid = false;
+
+    retopo->Message(MSG_UPDATE);
+    doc->EndUndo();
+    EventAdd();
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+
+    if (snappedCount > 0)
+    {
+        StatusSetText(FormatString("QuadDraw: Snapped @ point(s) to '@'"_s, snappedCount, targetDescName));
+    }
+    else
+    {
+        StatusSetText(FormatString("QuadDraw: All points already aligned to '@'"_s, targetDescName));
+    }
+
+    return true;
 }
 
 PolygonObject* QuadDrawToolData::CreateNewRetopoMesh(BaseDocument* doc)

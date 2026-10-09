@@ -10,6 +10,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_MULTICUT          "Мульти-разрез (Multi-Cut)";
     QUADDRAW_TOOL_DELETE            "Удаление (Delete)";
     QUADDRAW_DELETE_UNCONNECTED     "Удалить все несоединенные точки";
+    QUADDRAW_SNAP_ALL_TO_SURFACE    "Прилепить все точки к ближайшему мешу";
 
     QUADDRAW_GROUP_DISPLAY          "Отображение";
     QUADDRAW_DISABLE_CUSTOM_SHADING "Отключить кастомный шейдинг";

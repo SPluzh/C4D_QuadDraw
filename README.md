@@ -48,6 +48,7 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
         - **LMB Click**: Deletes single hovered vertex (including free unconnected dots), edge, or polygon. Deleting an unconnected point removes only that specific point and preserves all other unconnected points.
         - **Ctrl + LMB Click**: Deletes the entire component chain/loop (Edge Loop, Polygon Loop, or Vertex Loop).
       - **Delete All Unconnected Points Button**: A dedicated button in the **Tool Mode** settings to instantly clean up all isolated/free dots that are not connected to any polygon.
+      - **Snap All Points to Nearest Mesh Button**: A dedicated button in the **Tool Mode** settings to instantly snap all vertices of the retopo mesh to the surface of the nearest reference mesh (or target mesh linked in the tag) using high-performance BVH spatial acceleration with full undo support.
     - **Marking Menu / Pie Menu (`Hold Ctrl + Shift`)**: Hold **Ctrl + Shift** to open a radial Marking Menu directly under the cursor and switch tools instantly by gesture (Press & Flick):
       - **Up (North)**: `Extrude (Quad)`
       - **Right (East)**: `Move / Tweak`

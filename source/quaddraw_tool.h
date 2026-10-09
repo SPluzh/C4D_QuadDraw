@@ -36,6 +36,7 @@ private:
     BaseTag*       EnsureQuadDrawTag(BaseDocument* doc, PolygonObject* mesh);
     PolygonObject* CreateNewRetopoMesh(BaseDocument* doc);
     PolygonObject* FindExistingRetopoMesh(BaseDocument* doc);
+    Bool           SnapAllPointsToNearestMesh(BaseDocument* doc);
     Bool           DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
                                      PolygonObject* retopo, PolygonObject* target, Int32 v0, Int32 v1,
                                      Float mx, Float my, Int32 dragButton);

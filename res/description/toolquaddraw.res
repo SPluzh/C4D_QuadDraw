@@ -22,6 +22,7 @@ CONTAINER toolquaddraw
             }
 
             BUTTON QUADDRAW_DELETE_UNCONNECTED { }
+            BUTTON QUADDRAW_SNAP_ALL_TO_SURFACE { }
         }
 
         GROUP QUADDRAW_GROUP_INTERACTIVE
