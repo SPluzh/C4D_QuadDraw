@@ -4553,7 +4553,6 @@ void MeshBuilder::NotifyMeshUpdated(PolygonObject* mesh)
 {
     if (!mesh) return;
     mesh->SetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::CACHE);
-    mesh->Message(MSG_POINTS_CHANGED);
     mesh->Message(MSG_UPDATE);
 }
 

@@ -2041,7 +2041,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data,
             else
                 StatusSetText(FormatString("QuadDraw: Extruding edge (#@ - #@)"_s, v0, v1));
 
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         }
     }
 
@@ -2106,7 +2106,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeDrag(BaseDocument* doc, BaseContainer& data,
     m_weldTargetIdx = NOTOK;
     m_weldTargetIdx2 = NOTOK;
     m_activeDragMode = TweakMode::None;
-    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     return true;
 }
 
@@ -2464,7 +2464,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
             }
         }
 
-        retopo->Message(MSG_UPDATE);
+        m_builder.NotifyMeshUpdated(retopo);
 
         // Update live world positions of leading edges
         Matrix rMgLive = retopo->GetMg();
@@ -2485,7 +2485,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         else
             StatusSetText(FormatString("QuadDraw: Extruding Border Loop (@ quads)..."_s, (Int32)edgeInfos.GetCount()));
 
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     }
 
     MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
@@ -2539,7 +2539,7 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         doc->DoUndo(true);
         m_loopWeldTargets.Reset();
         StatusSetText("QuadDraw: Extrude canceled."_s);
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         return true;
     }
 
@@ -2587,7 +2587,8 @@ Bool QuadDrawToolData::DoExtrudeEdgeLoopDrag(BaseDocument* doc, BaseContainer& d
         }
     }
 
-    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    m_builder.NotifyMeshUpdated(retopo);
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     return true;
 }
 
@@ -2883,7 +2884,7 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         else
             StatusSetText(FormatString("QuadDraw: Moving loop (@ vertices)..."_s, numVerts));
 
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::NO_HIGHLIGHT_PLANE | DRAWFLAGS::INDRAG);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     }
 
     MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
@@ -2973,7 +2974,7 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         doc->DoUndo(true);
         m_loopWeldTargets.Reset();
         StatusSetText("QuadDraw: Move canceled."_s);
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         return true;
     }
 
@@ -3106,6 +3107,9 @@ Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, B
             }
         }
 
+        ptsW = retopo->GetPointW();
+        invMg = ~retopo->GetMg();
+
         for (Int32 k = 0; k < numGrabbed; ++k)
         {
             const MeshBuilder::GrabVertexInfo& gv = grabVerts[k];
@@ -3145,7 +3149,7 @@ Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, B
         }
 
         m_builder.NotifyMeshUpdated(retopo);
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::NO_HIGHLIGHT_PLANE | DRAWFLAGS::INDRAG);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     }
 
     MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
@@ -3155,6 +3159,7 @@ Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, B
     {
         doc->DoUndo(true);
         m_builder.NotifyMeshUpdated(retopo);
+        EventAdd();
         StatusSetText("QuadDraw [GRAB]: Cancelled."_s);
     }
     else
@@ -3162,9 +3167,12 @@ Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, B
         m_builder.NotifyMeshUpdated(retopo);
         doc->EndUndo();
         EventAdd();
+        SpecialEventAdd(EVMSG_UPDATEHIGHLIGHT);
         StatusSetText(FormatString("QuadDraw [GRAB]: Grabbed and moved @ vertices."_s, numGrabbed));
     }
 
+    m_cursorX = mx + totalDx;
+    m_cursorY = my + totalDy;
     DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     return true;
 }
@@ -4290,8 +4298,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             m_cursorY = my;
 
             m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly);
-
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::NO_HIGHLIGHT_PLANE | DRAWFLAGS::INDRAG);
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         }
 
         win->MouseDragEnd();
@@ -4300,6 +4307,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_relaxLockInterior = false;
         doc->EndUndo();
         EventAdd();
+        SpecialEventAdd(EVMSG_UPDATEHIGHLIGHT);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
 
         if (lockInterior)
@@ -4488,7 +4496,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                     m_builder.SetVertexPosition(retopo, hitV, movePos);
                     StatusSetText(FormatString("QuadDraw: Moving vertex #@"_s, hitV));
                 }
-                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
             }
         }
 
@@ -4529,7 +4537,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_dragVertexIdx = NOTOK;
         m_weldTargetIdx = NOTOK;
         m_activeDragMode = TweakMode::None;
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         return true;
     }
 
@@ -4733,7 +4741,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                 else
                     StatusSetText(FormatString("QuadDraw: Moving edge (#@ - #@)"_s, v0, v1));
 
-                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
             }
         }
 
@@ -4824,7 +4832,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_weldTargetIdx = NOTOK;
         m_weldTargetIdx2 = NOTOK;
         m_activeDragMode = TweakMode::None;
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         return true;
     }
 
@@ -4930,7 +4938,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
                     m_builder.SetVertexPosition(retopo, polyPts[k], newPts[k]);
                 }
                 StatusSetText(FormatString("QuadDraw: Moving polygon #@"_s, hitPoly));
-                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
             }
         }
 
@@ -4965,7 +4973,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_dragPolyIdx = NOTOK;
         m_dragPolyNumPts = 0;
         m_activeDragMode = TweakMode::None;
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
         return true;
     }
 
@@ -5289,8 +5297,8 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
     PolygonObject* retopo = GetEditableMesh(doc, false);
 
-    // 1. Draw existing retopo polygons in user face color with transparency and wireframe lines (if custom mesh shading is enabled or during brush drag)
-    if (retopo && retopo->GetPolygonCount() > 0 && (!disableCustomShading || m_isGrabDragging || m_isRelaxDragging))
+    // 1. Draw existing retopo polygons in user face color with transparency and wireframe lines (if custom mesh shading is enabled)
+    if (!disableCustomShading && retopo && retopo->GetPolygonCount() > 0)
     {
         Int32 polyCount = retopo->GetPolygonCount();
         const CPolygon* polys = retopo->GetPolygonR();
@@ -5314,36 +5322,32 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
         }
 
-        // Draw translucent faces only when custom shading is enabled
-        if (!disableCustomShading)
+        bd->SetTransparency(transVal);
+        for (Int32 i = 0; i < polyCount; ++i)
         {
-            bd->SetTransparency(transVal);
-            for (Int32 i = 0; i < polyCount; ++i)
+            const CPolygon& p = polys[i];
+            Bool isQuad = (p.c != p.d);
+
+            Vector qPts[4] = {
+                rMg * pts[p.a],
+                rMg * pts[p.b],
+                rMg * pts[p.c],
+                rMg * pts[p.d]
+            };
+
+            if (disableXRay)
             {
-                const CPolygon& p = polys[i];
-                Bool isQuad = (p.c != p.d);
-
-                Vector qPts[4] = {
-                    rMg * pts[p.a],
-                    rMg * pts[p.b],
-                    rMg * pts[p.c],
-                    rMg * pts[p.d]
-                };
-
-                if (disableXRay)
-                {
-                    // Backface culling: do not draw back-facing polygons through front geometry
-                    Vector fn = Cross(qPts[1] - qPts[0], qPts[2] - qPts[0]);
-                    Vector polyCenter = (qPts[0] + qPts[1] + qPts[2]) * (1.0 / 3.0);
-                    Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
-                    if (Dot(fn, toCam) <= 0.0)
-                        continue;
-                }
-
-                bd->DrawPolygon(qPts, faceColors, isQuad);
+                // Backface culling: do not draw back-facing polygons through front geometry
+                Vector fn = Cross(qPts[1] - qPts[0], qPts[2] - qPts[0]);
+                Vector polyCenter = (qPts[0] + qPts[1] + qPts[2]) * (1.0 / 3.0);
+                Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+                if (Dot(fn, toCam) <= 0.0)
+                    continue;
             }
-            bd->DrawArrayEnd();
+
+            bd->DrawPolygon(qPts, faceColors, isQuad);
         }
+        bd->DrawArrayEnd();
 
         // Draw wireframe lines in user-configured wire color and thickness
         bd->SetTransparency(0);
