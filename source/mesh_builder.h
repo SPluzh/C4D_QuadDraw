@@ -260,6 +260,23 @@ public:
     // Relax vertices within brush radius in screen space (Laplacian smoothing constrained to target surface)
     Bool RelaxVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd, Float screenX, Float screenY, Float brushRadius, Float strength, Bool lockBorder = false, Bool lockInterior = false, Bool visibleOnly = true);
 
+    // Grab Brush: Structure storing initial state and weight of vertices in brush radius
+    struct GrabVertexInfo
+    {
+        Int32  index = NOTOK;
+        Vector initLocalPos = Vector(0.0);
+        Vector initWorldPos = Vector(0.0);
+        Vector initNormal = Vector(0.0, 1.0, 0.0);
+        Vector initScreenPos = Vector(0.0);
+        Float  weight = 0.0;
+    };
+
+    // Grab Brush: Collect and weight vertices within brush radius in screen space
+    Bool CollectGrabVertices(PolygonObject* retopo, PolygonObject* target, SurfaceSnapper& snapper, BaseDraw* bd,
+                             Float screenX, Float screenY, Float brushRadius, Float intensity,
+                             Int32 falloffType, Bool visibleOnly,
+                             maxon::BaseArray<GrabVertexInfo>& outVertices, Vector& outGrabCenterWorld);
+
     // Topological edge and neighbor cache
     struct EdgeCacheEntry
     {

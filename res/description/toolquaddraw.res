@@ -18,6 +18,7 @@ CONTAINER toolquaddraw
                     QUADDRAW_TOOL_KNIFE;
                     QUADDRAW_TOOL_MULTICUT;
                     QUADDRAW_TOOL_DELETE;
+                    QUADDRAW_TOOL_GRAB;
                 }
             }
 
@@ -56,6 +57,25 @@ CONTAINER toolquaddraw
             BOOL  QUADDRAW_RELAX_VISIBLE_ONLY { }
             REAL  QUADDRAW_RELAX_RADIUS   { MIN 5.0; MAX 300.0; MINSLIDER 10.0; MAXSLIDER 150.0; STEP 5.0; CUSTOMGUI REALSLIDER; }
             REAL  QUADDRAW_RELAX_STRENGTH { MIN 0.05; MAX 1.0; MINSLIDER 0.05; MAXSLIDER 1.0; STEP 0.05; CUSTOMGUI REALSLIDER; }
+        }
+
+        GROUP QUADDRAW_GROUP_GRAB
+        {
+            DEFAULT 1;
+
+            REAL  QUADDRAW_GRAB_RADIUS    { MIN 5.0; MAX 500.0; MINSLIDER 10.0; MAXSLIDER 200.0; STEP 5.0; CUSTOMGUI REALSLIDER; }
+            REAL  QUADDRAW_GRAB_INTENSITY { UNIT PERCENT; MIN 1.0; MAX 100.0; MINSLIDER 1.0; MAXSLIDER 100.0; STEP 1.0; CUSTOMGUI REALSLIDER; }
+            LONG  QUADDRAW_GRAB_FALLOFF
+            {
+                CYCLE
+                {
+                    QUADDRAW_GRAB_FALLOFF_SMOOTH;
+                    QUADDRAW_GRAB_FALLOFF_LINEAR;
+                    QUADDRAW_GRAB_FALLOFF_SPHERICAL;
+                    QUADDRAW_GRAB_FALLOFF_SHARP;
+                }
+            }
+            BOOL  QUADDRAW_GRAB_VISIBLE_ONLY { }
         }
 
         GROUP QUADDRAW_GROUP_DISPLAY

@@ -17,6 +17,30 @@ Int32 QuadDrawToolData::GetState(BaseDocument* doc)
     return CMD_ENABLED;
 }
 
+static Int32 GetActiveTool(const BaseDocument* doc, const BaseContainer& data)
+{
+    if (doc)
+    {
+        const BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+        if (toolData && toolData->FindIndex(QUADDRAW_ACTIVE_TOOL) != NOTOK)
+            return toolData->GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    }
+    return data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+}
+
+static void SetActiveTool(BaseDocument* doc, BaseContainer& data, Int32 newTool)
+{
+    data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+    if (doc)
+    {
+        BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+        if (toolData)
+            toolData->SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+    }
+    GeUpdateUI();
+    EventAdd();
+}
+
 Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThread* bt)
 {
     if (!DescriptionToolData::InitTool(doc, data, bt))
@@ -112,6 +136,15 @@ Bool QuadDrawToolData::InitTool(BaseDocument* doc, BaseContainer& data, BaseThre
             data.SetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
         if (data.FindIndex(QUADDRAW_RELAX_VISIBLE_ONLY) == NOTOK)
             data.SetBool(QUADDRAW_RELAX_VISIBLE_ONLY, true);
+
+        if (data.FindIndex(QUADDRAW_GRAB_RADIUS) == NOTOK)
+            data.SetFloat(QUADDRAW_GRAB_RADIUS, 50.0);
+        if (data.FindIndex(QUADDRAW_GRAB_INTENSITY) == NOTOK)
+            data.SetFloat(QUADDRAW_GRAB_INTENSITY, 1.0);
+        if (data.FindIndex(QUADDRAW_GRAB_FALLOFF) == NOTOK)
+            data.SetInt32(QUADDRAW_GRAB_FALLOFF, QUADDRAW_GRAB_FALLOFF_SMOOTH);
+        if (data.FindIndex(QUADDRAW_GRAB_VISIBLE_ONLY) == NOTOK)
+            data.SetBool(QUADDRAW_GRAB_VISIBLE_ONLY, true);
     }
 
     return true;
@@ -146,6 +179,11 @@ void QuadDrawToolData::InitDefaultSettings(BaseDocument* doc, BaseContainer& dat
     data.SetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
     data.SetBool(QUADDRAW_RELAX_VISIBLE_ONLY, true);
 
+    data.SetFloat(QUADDRAW_GRAB_RADIUS, 50.0);
+    data.SetFloat(QUADDRAW_GRAB_INTENSITY, 1.0);
+    data.SetInt32(QUADDRAW_GRAB_FALLOFF, QUADDRAW_GRAB_FALLOFF_SMOOTH);
+    data.SetBool(QUADDRAW_GRAB_VISIBLE_ONLY, true);
+
     DescriptionToolData::InitDefaultSettings(doc, data);
     data.SetBool(MDATA_INTERACTIVE, false);
 }
@@ -172,6 +210,9 @@ void QuadDrawToolData::FreeTool(BaseDocument* doc, BaseContainer& data)
     m_dragPolyNumPts = 0;
     m_weldTargetIdx = NOTOK;
     m_weldTargetIdx2 = NOTOK;
+    m_isGrabDragging = false;
+    m_grabStartX = 0.0;
+    m_grabStartY = 0.0;
     m_multiCutPoints.Reset();
     m_multiCutPreview.valid = false;
     m_multiCutPreview.cuts.Reset();
@@ -284,8 +325,11 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
             ToolAskMsgData* ask = static_cast<ToolAskMsgData*>(t_data);
             if (ask)
             {
-                ask->use_middlemouse = true;
-                ask->resize_allowed = true;
+                Int32 activeTool = GetActiveTool(doc, data);
+                Bool isGrab = (activeTool == QUADDRAW_TOOL_GRAB);
+                Bool allowResize = isGrab || m_shiftHeld;
+                ask->use_middlemouse = allowResize;
+                ask->resize_allowed = allowResize;
             }
             return true;
         }
@@ -296,15 +340,30 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
             if (!d || !d->data)
                 return false;
 
+            Int32 activeTool = GetActiveTool(doc, data);
+            Bool isGrab = (activeTool == QUADDRAW_TOOL_GRAB && !m_shiftHeld);
+
+            Int32 radiusParam = isGrab ? QUADDRAW_GRAB_RADIUS : QUADDRAW_RELAX_RADIUS;
+            Int32 strengthParam = isGrab ? QUADDRAW_GRAB_INTENSITY : QUADDRAW_RELAX_STRENGTH;
+            Float defRadius = 50.0;
+            Float defStrength = isGrab ? 1.0 : 0.35;
+            Float minRadius = 5.0;
+            Float maxRadius = isGrab ? 500.0 : 300.0;
+
             switch (d->pass)
             {
                 case ToolResizeData::RESIZE_PASS_INIT:
                 {
                     d->cross_type = true;
                     d->falloff.show = true;
-                    d->falloff.size = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
-                    d->falloff.opacity = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
-                    d->falloff.color = Vector(1.0, 1.0, 1.0);
+                    Float currentRadius = data.GetFloat(radiusParam, defRadius);
+                    Float currentStrength = data.GetFloat(strengthParam, defStrength);
+                    m_initialResizeRadius = currentRadius;
+                    m_initialResizeStrength = currentStrength;
+
+                    d->falloff.size = currentRadius;
+                    d->falloff.opacity = currentStrength;
+                    d->falloff.color = isGrab ? Vector(1.0, 0.72, 0.2) : Vector(1.0, 1.0, 1.0);
                     d->falloff.position.off = Vector(m_cursorX, m_cursorY, 0.0);
                     m_isResizingBrush = true;
                     m_brushResizeCenterX = m_cursorX;
@@ -316,32 +375,84 @@ Bool QuadDrawToolData::Message(BaseDocument* doc, BaseContainer& data, Int32 typ
                 {
                     if (d->horizontal)
                     {
-                        Float radius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+                        Float radius = data.GetFloat(radiusParam, defRadius);
                         radius += (Float)d->delta;
-                        radius = maxon::ClampValue(radius, Float(5.0), Float(500.0));
-                        data.SetFloat(QUADDRAW_RELAX_RADIUS, radius);
+                        radius = maxon::ClampValue(radius, Float(minRadius), Float(maxRadius));
+                        data.SetFloat(radiusParam, radius);
+                        if (d->data)
+                            d->data->SetFloat(radiusParam, radius);
+                        if (doc)
+                        {
+                            BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                            if (toolData)
+                                toolData->SetFloat(radiusParam, radius);
+                        }
                         d->falloff.size = radius;
                         d->cursor_text = FormatString("Radius: @ px"_s, (Int32)(radius + 0.5));
-                        StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Radius: @ px"_s, (Int32)(radius + 0.5)));
+                        if (isGrab)
+                            StatusSetText(FormatString("QuadDraw [GRAB BRUSH] | Radius: @ px"_s, (Int32)(radius + 0.5)));
+                        else
+                            StatusSetText(FormatString("QuadDraw [RELAX BRUSH] | Radius: @ px"_s, (Int32)(radius + 0.5)));
                     }
                     else
                     {
-                        Float strength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+                        Float strength = data.GetFloat(strengthParam, defStrength);
                         strength += (Float)d->delta * 0.005;
                         strength = maxon::ClampValue(strength, Float(0.01), Float(1.0));
-                        data.SetFloat(QUADDRAW_RELAX_STRENGTH, strength);
+                        data.SetFloat(strengthParam, strength);
+                        if (d->data)
+                            d->data->SetFloat(strengthParam, strength);
+                        if (doc)
+                        {
+                            BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                            if (toolData)
+                                toolData->SetFloat(strengthParam, strength);
+                        }
                         d->falloff.opacity = strength;
-                        d->cursor_text = FormatString("Strength: @"_s, strength);
-                        StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Strength: @"_s, strength));
+                        if (isGrab)
+                        {
+                            d->cursor_text = FormatString("Intensity: @%"_s, (Int32)(strength * 100.0 + 0.5));
+                            StatusSetText(FormatString("QuadDraw [GRAB BRUSH] | Intensity: @%"_s, (Int32)(strength * 100.0 + 0.5)));
+                        }
+                        else
+                        {
+                            d->cursor_text = FormatString("Strength: @"_s, strength);
+                            StatusSetText(FormatString("QuadDraw [RELAX BRUSH] | Strength: @"_s, strength));
+                        }
                     }
                     DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                     return true;
                 }
 
-                case ToolResizeData::RESIZE_PASS_END:
                 case ToolResizeData::RESIZE_PASS_RESET:
                 {
+                    data.SetFloat(radiusParam, m_initialResizeRadius);
+                    data.SetFloat(strengthParam, m_initialResizeStrength);
+                    if (d->data)
+                    {
+                        d->data->SetFloat(radiusParam, m_initialResizeRadius);
+                        d->data->SetFloat(strengthParam, m_initialResizeStrength);
+                    }
+                    if (doc)
+                    {
+                        BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                        if (toolData)
+                        {
+                            toolData->SetFloat(radiusParam, m_initialResizeRadius);
+                            toolData->SetFloat(strengthParam, m_initialResizeStrength);
+                        }
+                    }
                     m_isResizingBrush = false;
+                    GeUpdateUI();
+                    EventAdd();
+                    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+                    return true;
+                }
+
+                case ToolResizeData::RESIZE_PASS_END:
+                {
+                    m_isResizingBrush = false;
+                    GeUpdateUI();
                     EventAdd();
                     DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
                     return true;
@@ -711,7 +822,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
     String targetName = target ? target->GetName() : "None (No Snapping)"_s;
     Int32 retopoPolys = retopo ? retopo->GetPolygonCount() : 0;
     Int32 retopoPts = retopo ? retopo->GetPointCount() : 0;
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    Int32 activeTool = GetActiveTool(doc, data);
 
     // =========================================================================
     // MODE 0: CTRL + SHIFT HELD (PIE MENU / MARKING MENU)
@@ -750,7 +861,7 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
         }
         else
         {
-            StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
+            StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Up-Right=Grab, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
         }
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
@@ -765,9 +876,8 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
             if (newTool != m_pieMenu.activeToolOnOpen)
             {
-                data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+                SetActiveTool(doc, data, newTool);
                 StatusSetText(FormatString("QuadDraw: Tool switched to '@'"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
-                EventAdd();
             }
         }
         m_pieMenu.hoveredIndex = NOTOK;
@@ -1106,6 +1216,40 @@ Bool QuadDrawToolData::GetCursorInfo(BaseDocument* doc, BaseContainer& data, Bas
             StatusSetText(FormatString("QuadDraw [RELAX] | Shift+LMB Drag: Relax Brush (@ px, @) | Shift+MMB Drag: Adjust Radius & Strength | Target: @"_s,
                 (Int32)(brushRadius + 0.5), brushStrength, targetName));
         }
+
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        return true;
+    }
+
+    // =========================================================================
+    // MODE 4D: GRAB BRUSH TOOL MODE (ACTIVE TOOL == GRAB)
+    // =========================================================================
+    if (activeTool == QUADDRAW_TOOL_GRAB)
+    {
+        m_hoverSnap.valid = false;
+        m_shiftQuadPreview.valid = false;
+        m_hoverTweak.mode = TweakMode::None;
+        m_componentLoop.Reset();
+        m_edgeCutPreview.valid = false;
+        m_deleteHighlight.Reset();
+
+        Float grabRadius = data.GetFloat(QUADDRAW_GRAB_RADIUS, 50.0);
+        Float grabIntensity = data.GetFloat(QUADDRAW_GRAB_INTENSITY, 1.0);
+        Int32 grabFalloff = data.GetInt32(QUADDRAW_GRAB_FALLOFF, QUADDRAW_GRAB_FALLOFF_SMOOTH);
+
+        String falloffName;
+        switch (grabFalloff)
+        {
+            case QUADDRAW_GRAB_FALLOFF_LINEAR:    falloffName = "Linear"_s; break;
+            case QUADDRAW_GRAB_FALLOFF_SPHERICAL: falloffName = "Spherical"_s; break;
+            case QUADDRAW_GRAB_FALLOFF_SHARP:     falloffName = "Sharp"_s; break;
+            case QUADDRAW_GRAB_FALLOFF_SMOOTH:
+            default:                              falloffName = "Smooth"_s; break;
+        }
+
+        bc.SetInt32(RESULT_CURSOR, MOUSE_POINT_HAND);
+        StatusSetText(FormatString("QuadDraw [GRAB] | LMB Drag: Grab Mesh (@ px, @%, @) | MMB Drag: Adjust Radius & Intensity | Target: @"_s,
+            (Int32)(grabRadius + 0.5), (Int32)(grabIntensity * 100.0 + 0.5), falloffName, targetName));
 
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
@@ -2718,7 +2862,7 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
             }
         }
 
-        retopo->Message(MSG_UPDATE);
+        m_builder.NotifyMeshUpdated(retopo);
 
         // Update live world positions of component loop edges so overlay follows seamlessly
         Matrix rMgLive = retopo->GetMg();
@@ -2739,7 +2883,7 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         else
             StatusSetText(FormatString("QuadDraw: Moving loop (@ vertices)..."_s, numVerts));
 
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::NO_HIGHLIGHT_PLANE | DRAWFLAGS::INDRAG);
     }
 
     MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
@@ -2870,7 +3014,158 @@ Bool QuadDrawToolData::DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer&
         }
     }
 
-    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
+    return true;
+}
+
+Bool QuadDrawToolData::DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                       PolygonObject* retopo, PolygonObject* target, Float mx, Float my)
+{
+    if (!doc || !retopo || !bd || !win)
+        return false;
+
+    Float brushRadius = data.GetFloat(QUADDRAW_GRAB_RADIUS, 50.0);
+    Float intensity   = data.GetFloat(QUADDRAW_GRAB_INTENSITY, 1.0);
+    Int32 falloffType = data.GetInt32(QUADDRAW_GRAB_FALLOFF, QUADDRAW_GRAB_FALLOFF_SMOOTH);
+    Bool  visibleOnly = data.GetBool(QUADDRAW_GRAB_VISIBLE_ONLY, true);
+
+    maxon::BaseArray<MeshBuilder::GrabVertexInfo> grabVerts;
+    Vector grabCenterWorld(0.0);
+
+    if (!m_builder.CollectGrabVertices(retopo, target, m_snapper, bd, mx, my,
+                                       brushRadius, intensity, falloffType, visibleOnly,
+                                       grabVerts, grabCenterWorld))
+    {
+        StatusSetText("QuadDraw [GRAB]: No vertices within brush radius."_s);
+        return true;
+    }
+
+    doc->StartUndo();
+    doc->AddUndo(UNDOTYPE::CHANGE, retopo);
+
+    m_isGrabDragging = true;
+    m_grabStartX = mx;
+    m_grabStartY = my;
+    m_cursorX = mx;
+    m_cursorY = my;
+
+    SnapResult mouseStartHit;
+    if (target)
+        mouseStartHit = m_snapper.RaycastSurface(bd, target, mx, my);
+
+    Vector camRefStart = bd->SW_Reference(mx, my, grabCenterWorld);
+
+    BaseContainer device;
+    win->MouseDragStart(KEY_MLEFT, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
+
+    Float dx, dy;
+    Float totalDx = 0.0;
+    Float totalDy = 0.0;
+
+    Vector* ptsW = retopo->GetPointW();
+    Matrix invMg = ~retopo->GetMg();
+    Int32 ptCount = retopo->GetPointCount();
+    const Int32 numGrabbed = (Int32)grabVerts.GetCount();
+
+    while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
+    {
+        if (dx == 0.0 && dy == 0.0) continue;
+
+        totalDx += dx;
+        totalDy += dy;
+
+        Float curMx = mx + totalDx;
+        Float curMy = my + totalDy;
+        m_cursorX = curMx;
+        m_cursorY = curMy;
+
+        Vector camRefCur = bd->SW_Reference(curMx, curMy, grabCenterWorld);
+        Vector camDelta = camRefCur - camRefStart;
+        Vector delta3D = camDelta;
+
+        if (target)
+        {
+            SnapResult mouseCurHit = m_snapper.RaycastSurface(bd, target, curMx, curMy);
+            if (mouseStartHit.valid && mouseCurHit.valid)
+            {
+                Vector hitDelta = mouseCurHit.worldPos - mouseStartHit.worldPos;
+                Float hitDeltaLen = hitDelta.GetLength();
+                Float camDeltaLen = camDelta.GetLength();
+                if (hitDeltaLen <= camDeltaLen * 3.0 + 35.0)
+                {
+                    delta3D = hitDelta;
+                }
+            }
+            else if (mouseCurHit.valid)
+            {
+                Vector directDelta = mouseCurHit.worldPos - camRefStart;
+                if (directDelta.GetLength() <= camDelta.GetLength() * 3.0 + 35.0)
+                {
+                    delta3D = directDelta;
+                }
+            }
+        }
+
+        for (Int32 k = 0; k < numGrabbed; ++k)
+        {
+            const MeshBuilder::GrabVertexInfo& gv = grabVerts[k];
+            if (gv.index < 0 || gv.index >= ptCount) continue;
+
+            Vector candidatePos = gv.initWorldPos + delta3D * gv.weight;
+            Vector newPos = candidatePos;
+
+            if (target)
+            {
+                SnapResult snap = m_snapper.ProjectPointAlongNormal(target, candidatePos, gv.initNormal, 60.0);
+                if (snap.valid)
+                {
+                    newPos = snap.worldPos;
+                }
+                else
+                {
+                    SnapResult snap2 = m_snapper.ProjectPointAlongNormal(target, candidatePos, gv.initNormal, 120.0);
+                    if (snap2.valid)
+                    {
+                        newPos = snap2.worldPos;
+                    }
+                    else
+                    {
+                        Vector candScr = bd->WS(candidatePos);
+                        if (candScr.z > 0.0)
+                        {
+                            SnapResult sHit = m_snapper.RaycastSurface(bd, target, candScr.x, candScr.y);
+                            if (sHit.valid)
+                                newPos = sHit.worldPos;
+                        }
+                    }
+                }
+            }
+
+            ptsW[gv.index] = invMg * newPos;
+        }
+
+        m_builder.NotifyMeshUpdated(retopo);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::NO_HIGHLIGHT_PLANE | DRAWFLAGS::INDRAG);
+    }
+
+    MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
+    m_isGrabDragging = false;
+
+    if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+    {
+        doc->DoUndo(true);
+        m_builder.NotifyMeshUpdated(retopo);
+        StatusSetText("QuadDraw [GRAB]: Cancelled."_s);
+    }
+    else
+    {
+        m_builder.NotifyMeshUpdated(retopo);
+        doc->EndUndo();
+        EventAdd();
+        StatusSetText(FormatString("QuadDraw [GRAB]: Grabbed and moved @ vertices."_s, numGrabbed));
+    }
+
+    DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
     return true;
 }
 
@@ -2926,7 +3221,9 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     Float mx = msg.GetFloat(BFM_INPUT_X);
     Float my = msg.GetFloat(BFM_INPUT_Y);
     Int32 qualifier = msg.GetInt32(BFM_INPUT_QUALIFIER);
-    Bool shiftPressed = ((qualifier & QSHIFT) != 0) || m_shiftHeld;
+    m_shiftHeld = (qualifier & QSHIFT) != 0;
+    m_ctrlHeld  = (qualifier & QCTRL)  != 0;
+    Bool shiftPressed = m_shiftHeld;
 
     // If Pie Menu is active or Ctrl+Shift is held during click:
     if (m_pieMenu.active || (shiftPressed && ((qualifier & QCTRL) != 0)))
@@ -2936,9 +3233,8 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
             if (newTool != m_pieMenu.activeToolOnOpen)
             {
-                data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+                SetActiveTool(doc, data, newTool);
                 StatusSetText(FormatString("QuadDraw: Tool switched to '@'"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
-                EventAdd();
             }
         }
         m_pieMenu.active = false;
@@ -2956,7 +3252,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             return DoPieMenuDrag(doc, data, bd, win, mx, my);
         }
 
-        Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+        Int32 activeTool = GetActiveTool(doc, data);
         if (activeTool == QUADDRAW_TOOL_MULTICUT)
         {
             PolygonObject* retopo = GetEditableMesh(doc, false);
@@ -2987,13 +3283,24 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     }
 
     // =========================================================================
-    // ACTION 0: SHIFT + MMB DRAG -> RESIZE RELAX BRUSH (RADIUS & STRENGTH)
+    // ACTION 0: MMB DRAG -> RESIZE BRUSH (RELAX OR GRAB)
     // =========================================================================
-    if (channel == BFM_INPUT_MOUSEMIDDLE && shiftPressed)
+    Int32 activeTool = GetActiveTool(doc, data);
+    Bool isGrabTool = (activeTool == QUADDRAW_TOOL_GRAB);
+    Bool isRelaxResize = shiftPressed;
+    Bool isGrabResize = (isGrabTool && !shiftPressed);
+
+    if (channel == BFM_INPUT_MOUSEMIDDLE && (isGrabResize || isRelaxResize))
     {
-        Float initialRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+        Bool resizeGrab = isGrabResize;
+        Int32 radiusParam = resizeGrab ? QUADDRAW_GRAB_RADIUS : QUADDRAW_RELAX_RADIUS;
+        Int32 strengthParam = resizeGrab ? QUADDRAW_GRAB_INTENSITY : QUADDRAW_RELAX_STRENGTH;
+        Float defRadius = 50.0;
+        Float defStrength = resizeGrab ? 1.0 : 0.35;
+
+        Float initialRadius = data.GetFloat(radiusParam, defRadius);
         Float currentRadius = initialRadius;
-        Float initialStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
+        Float initialStrength = data.GetFloat(strengthParam, defStrength);
         Float currentStrength = initialStrength;
 
         m_isResizingBrush = true;
@@ -3006,57 +3313,97 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         win->MouseDragStart(KEY_MMIDDLE, mx, my, MOUSEDRAGFLAGS::DONTHIDEMOUSE);
 
         Float dx, dy;
-        Float totalDx = 0.0;
-        Float totalDy = 0.0;
-        // Direction lock like cross_type: 0 = uncommitted, 1 = horizontal (radius), 2 = vertical (strength)
-        Int32 dragAxis = 0;
 
         while (win->MouseDrag(&dx, &dy, &device) == MOUSEDRAGRESULT::CONTINUE)
         {
             if (dx == 0.0 && dy == 0.0) continue;
 
-            totalDx += dx;
-            totalDy += dy;
-
-            if (dragAxis == 0)
-            {
-                if (std::abs(totalDx) >= 3.0 || std::abs(totalDy) >= 3.0)
-                {
-                    if (std::abs(totalDx) >= std::abs(totalDy))
-                        dragAxis = 1;
-                    else
-                        dragAxis = 2;
-                }
-            }
-
-            if (dragAxis == 1 || dragAxis == 0)
+            if (dx != 0.0)
             {
                 currentRadius += dx;
                 currentRadius = maxon::ClampValue(currentRadius, Float(5.0), Float(500.0));
-                data.SetFloat(QUADDRAW_RELAX_RADIUS, currentRadius);
-                StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Relax Radius: @ px (Drag Left/Right to adjust)"_s, (Int32)(currentRadius + 0.5)));
+                data.SetFloat(radiusParam, currentRadius);
+                if (doc)
+                {
+                    BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                    if (toolData) toolData->SetFloat(radiusParam, currentRadius);
+                }
             }
-            if (dragAxis == 2 || (dragAxis == 0 && std::abs(totalDy) > std::abs(totalDx)))
+
+            if (dy != 0.0)
             {
+                // Dragging mouse UP (-dy in screen coords) increases intensity, dragging DOWN decreases
                 currentStrength -= dy * 0.005;
                 currentStrength = maxon::ClampValue(currentStrength, Float(0.01), Float(1.0));
-                data.SetFloat(QUADDRAW_RELAX_STRENGTH, currentStrength);
-                StatusSetText(FormatString("QuadDraw [RESIZE BRUSH] | Relax Strength: @ (Drag Up/Down to adjust)"_s, currentStrength));
+                data.SetFloat(strengthParam, currentStrength);
+                if (doc)
+                {
+                    BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                    if (toolData) toolData->SetFloat(strengthParam, currentStrength);
+                }
             }
 
             m_cursorX += dx;
             m_cursorY += dy;
 
+            if (resizeGrab)
+            {
+                StatusSetText(FormatString("QuadDraw [GRAB BRUSH] | Radius: @ px (Left/Right) | Intensity: @% (Up/Down)"_s,
+                    (Int32)(currentRadius + 0.5), (Int32)(currentStrength * 100.0 + 0.5)));
+            }
+            else
+            {
+                StatusSetText(FormatString("QuadDraw [RELAX BRUSH] | Radius: @ px (Left/Right) | Strength: @% (Up/Down)"_s,
+                    (Int32)(currentRadius + 0.5), (Int32)(currentStrength * 100.0 + 0.5)));
+            }
+
             DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         }
 
-        win->MouseDragEnd();
+        MOUSEDRAGRESULT dragResult = win->MouseDragEnd();
         m_isResizingBrush = false;
 
-        data.SetFloat(QUADDRAW_RELAX_RADIUS, currentRadius);
-        data.SetFloat(QUADDRAW_RELAX_STRENGTH, currentStrength);
-        StatusSetText(FormatString("QuadDraw: Relax Radius: @ px | Strength: @"_s, (Int32)(currentRadius + 0.5), currentStrength));
+        if (dragResult == MOUSEDRAGRESULT::ESCAPE)
+        {
+            data.SetFloat(radiusParam, initialRadius);
+            data.SetFloat(strengthParam, initialStrength);
+            if (doc)
+            {
+                BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                if (toolData)
+                {
+                    toolData->SetFloat(radiusParam, initialRadius);
+                    toolData->SetFloat(strengthParam, initialStrength);
+                }
+            }
+            StatusSetText("QuadDraw: Brush resize cancelled."_s);
+        }
+        else
+        {
+            data.SetFloat(radiusParam, currentRadius);
+            data.SetFloat(strengthParam, currentStrength);
+            if (doc)
+            {
+                BaseContainer* toolData = GetToolData(doc, PLUGIN_ID_QUADDRAW);
+                if (toolData)
+                {
+                    toolData->SetFloat(radiusParam, currentRadius);
+                    toolData->SetFloat(strengthParam, currentStrength);
+                }
+            }
+            if (resizeGrab)
+            {
+                StatusSetText(FormatString("QuadDraw [GRAB]: Radius: @ px | Intensity: @%"_s,
+                    (Int32)(currentRadius + 0.5), (Int32)(currentStrength * 100.0 + 0.5)));
+            }
+            else
+            {
+                StatusSetText(FormatString("QuadDraw [RELAX]: Radius: @ px | Strength: @%"_s,
+                    (Int32)(currentRadius + 0.5), (Int32)(currentStrength * 100.0 + 0.5)));
+            }
+        }
 
+        GeUpdateUI();
         EventAdd();
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
@@ -3065,7 +3412,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     // =========================================================================
     // ACTION 0B: MMB -> EXTRUDE HIGHLIGHTED/SELECTED BORDER EDGE OR EDGE LOOP
     // =========================================================================
-    if (channel == BFM_INPUT_MOUSEMIDDLE && !shiftPressed)
+    if (channel == BFM_INPUT_MOUSEMIDDLE && !shiftPressed && !isGrabTool)
     {
         PolygonObject* retopo = GetEditableMesh(doc, true);
         if (!retopo) return false;
@@ -3116,7 +3463,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
     if (!retopo) return false;
 
     PolygonObject* target = GetTargetMesh(doc, retopo);
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    activeTool = GetActiveTool(doc, data);
 
     // ==========================================
     // ACTION 1: DELETE ELEMENT (DELETE TOOL)
@@ -3944,7 +4291,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
 
             m_builder.RelaxVertices(retopo, target, m_snapper, bd, mx, my, brushRadius, strength, lockBorder, lockInterior, visibleOnly);
 
-            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+            DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::NO_HIGHLIGHT_PLANE | DRAWFLAGS::INDRAG);
         }
 
         win->MouseDragEnd();
@@ -3953,7 +4300,7 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
         m_relaxLockInterior = false;
         doc->EndUndo();
         EventAdd();
-        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
+        DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION | DRAWFLAGS::FORCEFULLREDRAW);
 
         if (lockInterior)
             StatusSetText("QuadDraw: Relaxed border vertices (interior locked)."_s);
@@ -3963,6 +4310,14 @@ Bool QuadDrawToolData::MouseInput(BaseDocument* doc, BaseContainer& data, BaseDr
             StatusSetText("QuadDraw: Relaxed all vertices."_s);
 
         return true;
+    }
+
+    // ==========================================
+    // ACTION 3C: GRAB BRUSH (ACTIVE TOOL == GRAB) + LMB DRAG
+    // ==========================================
+    if (activeTool == QUADDRAW_TOOL_GRAB && !m_ctrlHeld && !m_shiftHeld)
+    {
+        return DoGrabBrushDrag(doc, data, bd, win, retopo, target, mx, my);
     }
 
     // ==========================================
@@ -4934,8 +5289,8 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
 
     PolygonObject* retopo = GetEditableMesh(doc, false);
 
-    // 1. Draw existing retopo polygons in user face color with transparency and wireframe lines (if custom mesh shading is enabled)
-    if (!disableCustomShading && retopo && retopo->GetPolygonCount() > 0)
+    // 1. Draw existing retopo polygons in user face color with transparency and wireframe lines (if custom mesh shading is enabled or during brush drag)
+    if (retopo && retopo->GetPolygonCount() > 0 && (!disableCustomShading || m_isGrabDragging || m_isRelaxDragging))
     {
         Int32 polyCount = retopo->GetPolygonCount();
         const CPolygon* polys = retopo->GetPolygonR();
@@ -4959,33 +5314,36 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
             bd->SetDrawParam(DRAW_PARAMETER_USE_Z, GeData(false));
         }
 
-        // Draw translucent faces so underlying target mesh remains visible
-        bd->SetTransparency(transVal);
-        for (Int32 i = 0; i < polyCount; ++i)
+        // Draw translucent faces only when custom shading is enabled
+        if (!disableCustomShading)
         {
-            const CPolygon& p = polys[i];
-            Bool isQuad = (p.c != p.d);
-
-            Vector qPts[4] = {
-                rMg * pts[p.a],
-                rMg * pts[p.b],
-                rMg * pts[p.c],
-                rMg * pts[p.d]
-            };
-
-            if (disableXRay)
+            bd->SetTransparency(transVal);
+            for (Int32 i = 0; i < polyCount; ++i)
             {
-                // Backface culling: do not draw back-facing polygons through front geometry
-                Vector fn = Cross(qPts[1] - qPts[0], qPts[2] - qPts[0]);
-                Vector polyCenter = (qPts[0] + qPts[1] + qPts[2]) * (1.0 / 3.0);
-                Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
-                if (Dot(fn, toCam) <= 0.0)
-                    continue;
-            }
+                const CPolygon& p = polys[i];
+                Bool isQuad = (p.c != p.d);
 
-            bd->DrawPolygon(qPts, faceColors, isQuad);
+                Vector qPts[4] = {
+                    rMg * pts[p.a],
+                    rMg * pts[p.b],
+                    rMg * pts[p.c],
+                    rMg * pts[p.d]
+                };
+
+                if (disableXRay)
+                {
+                    // Backface culling: do not draw back-facing polygons through front geometry
+                    Vector fn = Cross(qPts[1] - qPts[0], qPts[2] - qPts[0]);
+                    Vector polyCenter = (qPts[0] + qPts[1] + qPts[2]) * (1.0 / 3.0);
+                    Vector toCam = isOrtho ? orthoLook : (camPos - polyCenter).GetNormalized();
+                    if (Dot(fn, toCam) <= 0.0)
+                        continue;
+                }
+
+                bd->DrawPolygon(qPts, faceColors, isQuad);
+            }
+            bd->DrawArrayEnd();
         }
-        bd->DrawArrayEnd();
 
         // Draw wireframe lines in user-configured wire color and thickness
         bd->SetTransparency(0);
@@ -5067,10 +5425,14 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         }
     }
 
-    // 2b. Draw Relax Brush circle when holding Shift (or during brush resize)
-    if (m_isResizingBrush || (m_shiftHeld && !m_ctrlHeld && (!m_shiftQuadPreview.valid || m_isRelaxDragging)))
+    Int32 activeTool = GetActiveTool(doc, data);
+
+    // 2b. Draw Relax Brush circle when holding Shift (or during relax brush resize in non-grab mode)
+    if (activeTool != QUADDRAW_TOOL_GRAB &&
+        (m_isResizingBrush || (m_shiftHeld && !m_ctrlHeld && (!m_shiftQuadPreview.valid || m_isRelaxDragging))))
     {
         Float relaxRadius = data.GetFloat(QUADDRAW_RELAX_RADIUS, 50.0);
+        Float relaxStrength = data.GetFloat(QUADDRAW_RELAX_STRENGTH, 0.35);
         Float cx = m_isResizingBrush ? m_brushResizeCenterX : m_cursorX;
         Float cy = m_isResizingBrush ? m_brushResizeCenterY : m_cursorY;
 
@@ -5092,10 +5454,106 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
         if (m_isResizingBrush)
         {
             // Center crosshair
+            bd->SetPen(Vector(1.0, 1.0, 1.0));
             bd->DrawLine(Vector(cx - 5.0, cy, 0.0), Vector(cx + 5.0, cy, 0.0), 0);
             bd->DrawLine(Vector(cx, cy - 5.0, 0.0), Vector(cx, cy + 5.0, 0.0), 0);
-            // Horizontal radius indicator line to the edge
+
+            // Horizontal radius indicator line (Left / Right)
+            bd->SetPen(Vector(0.2, 0.85, 1.0));
             bd->DrawLine(Vector(cx, cy, 0.0), Vector(cx + relaxRadius, cy, 0.0), 0);
+            bd->DrawLine(Vector(cx + relaxRadius, cy - 4.0, 0.0), Vector(cx + relaxRadius, cy + 4.0, 0.0), 0);
+
+            // Vertical strength indicator line (Up / Down)
+            Float strengthH = relaxRadius * relaxStrength;
+            bd->SetPen(Vector(0.15, 0.95, 0.55));
+            bd->DrawLine(Vector(cx, cy, 0.0), Vector(cx, cy - strengthH, 0.0), 0);
+            bd->DrawLine(Vector(cx - 4.0, cy - strengthH, 0.0), Vector(cx + 4.0, cy - strengthH, 0.0), 0);
+
+            // Inner circle representing Strength
+            Float innerR = relaxRadius * relaxStrength;
+            if (innerR > 2.0)
+            {
+                bd->SetPen(Vector(0.15, 0.95, 0.55));
+                const Int32 innerSegs = 32;
+                for (Int32 i = 0; i < innerSegs; ++i)
+                {
+                    Float a0 = (Float)i * (2.0 * PI / (Float)innerSegs);
+                    Float a1 = (Float)(i + 1) * (2.0 * PI / (Float)innerSegs);
+                    Vector p0(cx + cos(a0) * innerR, cy + sin(a0) * innerR, 0.0);
+                    Vector p1(cx + cos(a1) * innerR, cy + sin(a1) * innerR, 0.0);
+                    bd->DrawLine(p0, p1, 0);
+                }
+            }
+        }
+
+        bd->SetMatrix_Matrix(nullptr, Matrix());
+    }
+
+    // 2c. Draw Grab Brush circle when in Grab Tool mode (or during Grab brush resize / drag)
+    if (activeTool == QUADDRAW_TOOL_GRAB && !m_pieMenu.active && (m_isResizingBrush || (!m_shiftHeld && !m_ctrlHeld)))
+    {
+        Float grabRadius = data.GetFloat(QUADDRAW_GRAB_RADIUS, 50.0);
+        Float grabIntensity = data.GetFloat(QUADDRAW_GRAB_INTENSITY, 1.0);
+        Float cx = m_isResizingBrush ? m_brushResizeCenterX : (m_isGrabDragging ? m_grabStartX : m_cursorX);
+        Float cy = m_isResizingBrush ? m_brushResizeCenterY : (m_isGrabDragging ? m_grabStartY : m_cursorY);
+
+        bd->SetMatrix_Screen();
+        Vector circleColor = m_isResizingBrush ? Vector(1.0, 0.72, 0.2) :
+                            (m_isGrabDragging ? Vector(1.0, 0.72, 0.2) : Vector(0.25, 0.85, 1.0));
+        bd->SetPen(circleColor);
+
+        const Int32 numSegs = 48;
+        for (Int32 i = 0; i < numSegs; ++i)
+        {
+            Float a0 = (Float)i * (2.0 * PI / (Float)numSegs);
+            Float a1 = (Float)(i + 1) * (2.0 * PI / (Float)numSegs);
+            Vector p0(cx + cos(a0) * grabRadius, cy + sin(a0) * grabRadius, 0.0);
+            Vector p1(cx + cos(a1) * grabRadius, cy + sin(a1) * grabRadius, 0.0);
+            bd->DrawLine(p0, p1, 0);
+        }
+
+        if (m_isGrabDragging)
+        {
+            // Indicator line from grab start center to current cursor
+            bd->SetPen(Vector(1.0, 0.85, 0.3));
+            bd->DrawLine(Vector(m_grabStartX, m_grabStartY, 0.0), Vector(m_cursorX, m_cursorY, 0.0), 0);
+
+            // Cursor handle dot
+            bd->DrawCircle2D((Int32)m_cursorX, (Int32)m_cursorY, 3);
+        }
+        else if (m_isResizingBrush)
+        {
+            // Center crosshair
+            bd->SetPen(Vector(1.0, 1.0, 1.0));
+            bd->DrawLine(Vector(cx - 5.0, cy, 0.0), Vector(cx + 5.0, cy, 0.0), 0);
+            bd->DrawLine(Vector(cx, cy - 5.0, 0.0), Vector(cx, cy + 5.0, 0.0), 0);
+
+            // Horizontal radius indicator line (Left / Right)
+            bd->SetPen(Vector(0.25, 0.85, 1.0)); // Cyan
+            bd->DrawLine(Vector(cx, cy, 0.0), Vector(cx + grabRadius, cy, 0.0), 0);
+            bd->DrawLine(Vector(cx + grabRadius, cy - 4.0, 0.0), Vector(cx + grabRadius, cy + 4.0, 0.0), 0);
+
+            // Vertical intensity indicator line (Up / Down)
+            Float intensityH = grabRadius * grabIntensity;
+            bd->SetPen(Vector(1.0, 0.55, 0.15)); // Warm Amber / Orange
+            bd->DrawLine(Vector(cx, cy, 0.0), Vector(cx, cy - intensityH, 0.0), 0);
+            bd->DrawLine(Vector(cx - 4.0, cy - intensityH, 0.0), Vector(cx + 4.0, cy - intensityH, 0.0), 0);
+
+            // Inner circle representing Intensity
+            Float innerR = grabRadius * grabIntensity;
+            if (innerR > 2.0)
+            {
+                bd->SetPen(Vector(1.0, 0.65, 0.2));
+                const Int32 innerSegs = 32;
+                for (Int32 i = 0; i < innerSegs; ++i)
+                {
+                    Float a0 = (Float)i * (2.0 * PI / (Float)innerSegs);
+                    Float a1 = (Float)(i + 1) * (2.0 * PI / (Float)innerSegs);
+                    Vector p0(cx + cos(a0) * innerR, cy + sin(a0) * innerR, 0.0);
+                    Vector p1(cx + cos(a1) * innerR, cy + sin(a1) * innerR, 0.0);
+                    bd->DrawLine(p0, p1, 0);
+                }
+            }
         }
 
         bd->SetMatrix_Matrix(nullptr, Matrix());
@@ -5122,7 +5580,6 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     }
 
     // 3A2. Draw Multi-Cut Preview (Placed points, cut path, candidate hover, and slice drag)
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
     if ((activeTool == QUADDRAW_TOOL_MULTICUT || activeTool == QUADDRAW_TOOL_KNIFE) && !m_ctrlHeld)
     {
         // 1. Draw Slice Drag if active
@@ -5834,7 +6291,7 @@ TOOLDRAW QuadDrawToolData::Draw(BaseDocument* doc, BaseContainer& data, BaseDraw
     // 9. Draw Pie Menu overlay (Shift + RMB Marking Menu)
     if (m_pieMenu.active)
     {
-        DrawPieMenu(bd, data);
+        DrawPieMenu(bd, data, activeTool);
     }
 
     bd->SetDrawParam(DRAW_PARAMETER_USE_Z, oldUseZ);
@@ -5857,26 +6314,33 @@ void QuadDrawToolData::PieMenuState::Init()
     items[0].angleRad = -PI * 0.5;
     items[0].accentColor = Vector(0.15, 0.85, 0.45); // Mint Green
 
-    // Item 1: Right (East, 0 deg) -> Move / Tweak
-    items[1].toolId = QUADDRAW_TOOL_MOVE;
-    items[1].title = "Move / Tweak"_s;
-    items[1].subtitle = "Tweak Components"_s;
-    items[1].angleRad = 0.0;
-    items[1].accentColor = Vector(0.25, 0.65, 1.0); // Cyan / Blue
+    // Item 1: Up-Right (North-East, -45 deg) -> Grab Brush
+    items[1].toolId = QUADDRAW_TOOL_GRAB;
+    items[1].title = "Grab Brush"_s;
+    items[1].subtitle = "Soft Move / Sculpt"_s;
+    items[1].angleRad = -PI * 0.25;
+    items[1].accentColor = Vector(0.95, 0.55, 0.25); // Warm Amber / Orange
 
-    // Item 2: Down (South, +90 deg) -> Multi-Cut
-    items[2].toolId = QUADDRAW_TOOL_MULTICUT;
-    items[2].title = "Multi-Cut"_s;
-    items[2].subtitle = "Cut & Slice"_s;
-    items[2].angleRad = PI * 0.5;
-    items[2].accentColor = Vector(1.0, 0.75, 0.2); // Amber / Yellow
+    // Item 2: Right (East, 0 deg) -> Move / Tweak
+    items[2].toolId = QUADDRAW_TOOL_MOVE;
+    items[2].title = "Move / Tweak"_s;
+    items[2].subtitle = "Tweak Components"_s;
+    items[2].angleRad = 0.0;
+    items[2].accentColor = Vector(0.25, 0.65, 1.0); // Cyan / Blue
 
-    // Item 3: Left (West, 180 deg) -> Delete
-    items[3].toolId = QUADDRAW_TOOL_DELETE;
-    items[3].title = "Delete"_s;
-    items[3].subtitle = "Delete Elements"_s;
-    items[3].angleRad = PI;
-    items[3].accentColor = Vector(1.0, 0.3, 0.3); // Red
+    // Item 3: Down (South, +90 deg) -> Multi-Cut
+    items[3].toolId = QUADDRAW_TOOL_MULTICUT;
+    items[3].title = "Multi-Cut"_s;
+    items[3].subtitle = "Cut & Slice"_s;
+    items[3].angleRad = PI * 0.5;
+    items[3].accentColor = Vector(1.0, 0.75, 0.2); // Amber / Yellow
+
+    // Item 4: Left (West, 180 deg) -> Delete
+    items[4].toolId = QUADDRAW_TOOL_DELETE;
+    items[4].title = "Delete"_s;
+    items[4].subtitle = "Delete Elements"_s;
+    items[4].angleRad = PI;
+    items[4].accentColor = Vector(1.0, 0.3, 0.3); // Red
 }
 
 void QuadDrawToolData::UpdatePieMenuHover()
@@ -5895,30 +6359,35 @@ void QuadDrawToolData::UpdatePieMenuHover()
     Float angle = std::atan2(dy, dx);
     Float deg = angle * (180.0 / PI);
 
-    // 4 cardinal sectors of 90 degrees each:
-    // Top: [-135, -45] -> 0: Extrude (Up)
-    // Right: [-45, 45] -> 1: Move / Tweak (Right)
-    // Bottom: [45, 135] -> 2: Multi-Cut (Down)
-    // Left: > 135 or < -135 -> 3: Delete (Left)
-    if (deg >= -135.0 && deg < -45.0)
+    // Cardinal + diagonal sectors:
+    // North: [-112.5, -67.5] -> 0: Extrude (Up)
+    // North-East: [-67.5, -22.5] -> 1: Grab Brush (Up-Right)
+    // East: [-22.5, 45.0] -> 2: Move / Tweak (Right)
+    // South: [45.0, 135.0] -> 3: Multi-Cut (Down)
+    // West: > 135.0 or < -112.5 -> 4: Delete (Left)
+    if (deg >= -112.5 && deg < -67.5)
     {
         m_pieMenu.hoveredIndex = 0;
     }
-    else if (deg >= -45.0 && deg < 45.0)
+    else if (deg >= -67.5 && deg < -22.5)
     {
         m_pieMenu.hoveredIndex = 1;
     }
-    else if (deg >= 45.0 && deg < 135.0)
+    else if (deg >= -22.5 && deg < 45.0)
     {
         m_pieMenu.hoveredIndex = 2;
     }
-    else
+    else if (deg >= 45.0 && deg < 135.0)
     {
         m_pieMenu.hoveredIndex = 3;
     }
+    else
+    {
+        m_pieMenu.hoveredIndex = 4;
+    }
 }
 
-void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data)
+void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data, Int32 activeTool)
 {
     if (!bd || !m_pieMenu.active) return;
 
@@ -5931,8 +6400,6 @@ void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data)
     Float oy = m_pieMenu.originY;
     Float curX = m_pieMenu.currentX;
     Float curY = m_pieMenu.currentY;
-
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
 
     auto drawScreenQuad = [&](Float x1, Float y1, Float x2, Float y2, const Vector& col)
     {
@@ -6005,10 +6472,10 @@ void QuadDrawToolData::DrawPieMenu(BaseDraw* bd, const BaseContainer& data)
         drawScreenCircleFilled(curX, curY, 3.5, pointerCol, 12);
     }
 
-    // 3. Render 4 radial tool cards
-    const Float distCard = 80.0;
-    const Float baseW = 120.0;
-    const Float baseH = 32.0;
+    // 3. Render 5 radial tool cards
+    const Float distCard = 90.0;
+    const Float baseW = 106.0;
+    const Float baseH = 28.0;
 
     for (Int32 i = 0; i < PieMenuState::ITEM_COUNT; ++i)
     {
@@ -6093,7 +6560,7 @@ Bool QuadDrawToolData::DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, Bas
     m_pieMenu.currentX = mx;
     m_pieMenu.currentY = my;
     m_pieMenu.hoveredIndex = NOTOK;
-    m_pieMenu.activeToolOnOpen = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    m_pieMenu.activeToolOnOpen = GetActiveTool(doc, data);
 
     DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
 
@@ -6128,7 +6595,7 @@ Bool QuadDrawToolData::DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, Bas
         Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
         if (newTool != m_pieMenu.activeToolOnOpen)
         {
-            data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+            SetActiveTool(doc, data, newTool);
             StatusSetText(FormatString("QuadDraw: Switched to '@' tool"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
 
             m_shiftQuadPreview.valid = false;
@@ -6138,8 +6605,6 @@ Bool QuadDrawToolData::DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, Bas
             m_multiCutHover = MultiCutPoint();
             m_hoverTweak.Reset();
             m_activeDragMode = TweakMode::None;
-
-            EventAdd();
         }
     }
 
@@ -6155,7 +6620,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
     m_ctrlHeld  = (qual & QCTRL)  != 0;
 
     Int32 key = msg.GetInt32(BFM_INPUT_CHANNEL);
-    Int32 activeTool = data.GetInt32(QUADDRAW_ACTIVE_TOOL, QUADDRAW_TOOL_QUAD);
+    Int32 activeTool = GetActiveTool(doc, data);
 
     Bool ctrlShift = (m_shiftHeld && m_ctrlHeld);
     if (ctrlShift && !m_pieMenu.active)
@@ -6176,7 +6641,7 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
         m_edgeCutPreview.valid = false;
         m_deleteHighlight.Reset();
 
-        StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
+        StatusSetText("QuadDraw [MARKING MENU] | Move mouse: Up=Extrude, Up-Right=Grab, Right=Move, Down=Multi-Cut, Left=Delete | Release to select"_s);
         DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::NO_ANIMATION);
         return true;
     }
@@ -6188,9 +6653,8 @@ Bool QuadDrawToolData::KeyboardInput(BaseDocument* doc, BaseContainer& data, Bas
             Int32 newTool = m_pieMenu.items[m_pieMenu.hoveredIndex].toolId;
             if (newTool != m_pieMenu.activeToolOnOpen)
             {
-                data.SetInt32(QUADDRAW_ACTIVE_TOOL, newTool);
+                SetActiveTool(doc, data, newTool);
                 StatusSetText(FormatString("QuadDraw: Tool switched to '@'"_s, m_pieMenu.items[m_pieMenu.hoveredIndex].title));
-                EventAdd();
             }
         }
         m_pieMenu.hoveredIndex = NOTOK;

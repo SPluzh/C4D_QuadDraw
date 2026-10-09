@@ -47,6 +47,8 @@ private:
     Bool           DoMoveComponentLoopDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
                                            PolygonObject* retopo, PolygonObject* target,
                                            Float mx, Float my, Int32 dragButton);
+    Bool           DoGrabBrushDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win,
+                                   PolygonObject* retopo, PolygonObject* target, Float mx, Float my);
 
     SurfaceSnapper m_snapper;
     MeshBuilder    m_builder;
@@ -63,9 +65,14 @@ private:
     Bool           m_isRelaxDragging = false;
     Bool           m_relaxLockBorder = false;
     Bool           m_relaxLockInterior = false;
+    Bool           m_isGrabDragging = false;
+    Float          m_grabStartX = 0.0;
+    Float          m_grabStartY = 0.0;
     Bool           m_isResizingBrush = false;
     Float          m_brushResizeCenterX = 0.0;
     Float          m_brushResizeCenterY = 0.0;
+    Float          m_initialResizeRadius = 50.0;
+    Float          m_initialResizeStrength = 1.0;
 
     // Shift hover throttling and border check caching
     Float          m_lastShiftHoverX = -1e30;
@@ -229,7 +236,7 @@ private:
         Int32  hoveredIndex = NOTOK;
         Int32  activeToolOnOpen = 0;
 
-        static const Int32 ITEM_COUNT = 4;
+        static const Int32 ITEM_COUNT = 5;
         PieMenuItem items[ITEM_COUNT];
 
         void Init();
@@ -238,7 +245,7 @@ private:
     PieMenuState m_pieMenu;
 
     void UpdatePieMenuHover();
-    void DrawPieMenu(BaseDraw* bd, const BaseContainer& data);
+    void DrawPieMenu(BaseDraw* bd, const BaseContainer& data, Int32 activeTool);
     Bool DoPieMenuDrag(BaseDocument* doc, BaseContainer& data, BaseDraw* bd, EditorWindow* win, Float mx, Float my);
 };
 

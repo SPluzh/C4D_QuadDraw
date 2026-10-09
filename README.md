@@ -47,10 +47,16 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
       - **Delete**: Dedicated component deletion tool:
         - **LMB Click**: Deletes single hovered vertex (including free unconnected dots), edge, or polygon. Deleting an unconnected point removes only that specific point and preserves all other unconnected points.
         - **Ctrl + LMB Click**: Deletes the entire component chain/loop (Edge Loop, Polygon Loop, or Vertex Loop).
+      - **Grab Brush**: Dedicated soft move and sculpt brush for shaping retopology meshes:
+        - **LMB Drag**: Grabs and smoothly translates vertices within the brush radius across the target reference surface (or view plane in freeform mode) attenuated by falloff and intensity.
+        - **MMB Drag**: Interactively adjusts brush radius (horizontal drag) and intensity (vertical drag).
+        - **Shift + LMB Drag**: Temporarily engages the Relax brush for quick smoothing without switching tools.
+        - **Settings**: Configurable brush radius, intensity (1% to 100%), falloff profiles (Smooth Hermite, Linear, Spherical Dome, Sharp Spike), and Visible Only backface culling.
       - **Delete All Unconnected Points Button**: A dedicated button in the **Tool Mode** settings to instantly clean up all isolated/free dots that are not connected to any polygon.
       - **Snap All Points to Nearest Mesh Button**: A dedicated button in the **Tool Mode** settings to instantly snap all vertices of the retopo mesh to the surface of the nearest reference mesh (or target mesh linked in the tag) using high-performance BVH spatial acceleration with full undo support.
     - **Marking Menu / Pie Menu (`Hold Ctrl + Shift`)**: Hold **Ctrl + Shift** to open a radial Marking Menu directly under the cursor and switch tools instantly by gesture (Press & Flick):
       - **Up (North)**: `Extrude (Quad)`
+      - **Up-Right (North-East)**: `Grab Brush`
       - **Right (East)**: `Move / Tweak`
       - **Down (South)**: `Multi-Cut`
       - **Left (West)**: `Delete`
@@ -92,7 +98,9 @@ https://github.com/user-attachments/assets/7b6e931a-07b8-4054-8844-165ccbf084e4
 | **Shift + LMB** | Create quad polygon from preview |
 | **Shift + LMB Drag** | Relax topology using the relax brush |
 | **Shift + MMB Drag** | Interactively adjust relax brush radius (horizontal) and strength (vertical) |
-| **Hold Ctrl + Shift** | Open radial Marking Menu (Pie Menu) for fast tool switching (Up: Extrude, Right: Move, Down: Multi-Cut, Left: Delete) |
+| **LMB Drag (in Grab mode)** | Grab and soft-move vertices with falloff and intensity |
+| **MMB Drag (in Grab mode)** | Interactively adjust Grab brush radius (horizontal) and intensity (vertical) |
+| **Hold Ctrl + Shift** | Open radial Marking Menu (Pie Menu) for fast tool switching (Up: Extrude, Up-Right: Grab, Right: Move, Down: Multi-Cut, Left: Delete) |
 | **Enter / RMB / Double-Click** | Commit Multi-Cut cut (splits quads/triangles along cut chain) |
 | **Backspace / Delete** | Remove last placed point in Multi-Cut |
 | **Ctrl + Hover** | Highlight loop of components (in Multi-Cut: preview edge loop cut) |

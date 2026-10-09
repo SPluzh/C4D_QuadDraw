@@ -9,6 +9,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_KNIFE             "Knife (Cut Loops)";
     QUADDRAW_TOOL_MULTICUT          "Multi-Cut";
     QUADDRAW_TOOL_DELETE            "Delete";
+    QUADDRAW_TOOL_GRAB              "Grab Brush";
     QUADDRAW_DELETE_UNCONNECTED     "Delete All Unconnected Points";
     QUADDRAW_SNAP_ALL_TO_SURFACE    "Snap All Points to Nearest Mesh";
 
@@ -39,4 +40,14 @@ STRINGTABLE toolquaddraw
     QUADDRAW_RELAX_VISIBLE_ONLY     "Visible Only";
     QUADDRAW_RELAX_RADIUS           "Relax Radius (px)";
     QUADDRAW_RELAX_STRENGTH         "Relax Strength";
+
+    QUADDRAW_GROUP_GRAB             "Grab Brush Settings";
+    QUADDRAW_GRAB_RADIUS            "Brush Radius (px)";
+    QUADDRAW_GRAB_INTENSITY         "Intensity";
+    QUADDRAW_GRAB_FALLOFF           "Falloff";
+    QUADDRAW_GRAB_FALLOFF_SMOOTH    "Smooth";
+    QUADDRAW_GRAB_FALLOFF_LINEAR    "Linear";
+    QUADDRAW_GRAB_FALLOFF_SPHERICAL "Spherical";
+    QUADDRAW_GRAB_FALLOFF_SHARP     "Sharp";
+    QUADDRAW_GRAB_VISIBLE_ONLY      "Visible Only";
 }

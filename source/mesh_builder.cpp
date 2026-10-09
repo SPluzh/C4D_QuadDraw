@@ -4245,9 +4245,315 @@ Bool MeshBuilder::RelaxVertices(PolygonObject* retopo, PolygonObject* target, Su
     return true;
 }
 
+Bool MeshBuilder::CollectGrabVertices(
+    PolygonObject* retopo,
+    PolygonObject* target,
+    SurfaceSnapper& snapper,
+    BaseDraw* bd,
+    Float screenX,
+    Float screenY,
+    Float brushRadius,
+    Float intensity,
+    Int32 falloffType,
+    Bool visibleOnly,
+    maxon::BaseArray<GrabVertexInfo>& outVertices,
+    Vector& outGrabCenterWorld)
+{
+    outVertices.Reset();
+    outGrabCenterWorld = Vector(0.0);
+
+    if (!retopo || !bd || brushRadius <= 0.0 || intensity <= 0.0)
+        return false;
+
+    Int32 ptCount = retopo->GetPointCount();
+    if (ptCount <= 0)
+        return false;
+
+    Int32 polyCount = retopo->GetPolygonCount();
+    const Vector* pts = retopo->GetPointR();
+    const CPolygon* polys = retopo->GetPolygonR();
+    Matrix retopoMg = retopo->GetMg();
+
+    // 1. Calculate vertex normals
+    maxon::BaseArray<Vector> pointNormals;
+    pointNormals.Resize(ptCount) iferr_ignore("Resize pointNormals");
+    for (Int32 i = 0; i < ptCount; ++i) pointNormals[i] = Vector(0.0);
+
+    maxon::BaseArray<Bool> vertHasFrontPoly;
+    maxon::BaseArray<Bool> polyFacingCam;
+    if (visibleOnly && polyCount > 0)
+    {
+        vertHasFrontPoly.Resize(ptCount) iferr_ignore("Resize vertHasFrontPoly");
+        for (Int32 i = 0; i < ptCount; ++i) vertHasFrontPoly[i] = false;
+        polyFacingCam.Resize(polyCount) iferr_ignore("Resize polyFacingCam");
+        for (Int32 p = 0; p < polyCount; ++p) polyFacingCam[p] = false;
+    }
+
+    if (polyCount > 0)
+    {
+        for (Int32 p = 0; p < polyCount; ++p)
+        {
+            const CPolygon& poly = polys[p];
+            Vector pA = retopoMg * pts[poly.a];
+            Vector pB = retopoMg * pts[poly.b];
+            Vector pC = retopoMg * pts[poly.c];
+            Vector fn = Cross(pB - pA, pC - pA).GetNormalized();
+
+            pointNormals[poly.a] += fn;
+            pointNormals[poly.b] += fn;
+            pointNormals[poly.c] += fn;
+            if (poly.c != poly.d)
+                pointNormals[poly.d] += fn;
+
+            if (visibleOnly)
+            {
+                Vector pD = (poly.c != poly.d) ? (retopoMg * pts[poly.d]) : pC;
+                Vector pCenter = (pA + pB + pC + pD) * (poly.c != poly.d ? 0.25 : (1.0 / 3.0));
+                Vector sCenter = bd->WS(pCenter);
+                if (sCenter.z > 0.0)
+                {
+                    Vector rayNear = bd->SW(Vector(sCenter.x, sCenter.y, 0.0));
+                    Vector rayFar  = bd->SW(Vector(sCenter.x, sCenter.y, 1000.0));
+                    Vector toCam   = (rayNear - rayFar).GetNormalized();
+                    if (Dot(fn, toCam) > -0.05)
+                    {
+                        polyFacingCam[p] = true;
+                        vertHasFrontPoly[poly.a] = true;
+                        vertHasFrontPoly[poly.b] = true;
+                        vertHasFrontPoly[poly.c] = true;
+                        if (poly.c != poly.d)
+                            vertHasFrontPoly[poly.d] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        if (Dot(pointNormals[i], pointNormals[i]) > 1e-6)
+            pointNormals[i] = pointNormals[i].GetNormalized();
+        else
+            pointNormals[i] = bd ? -bd->GetMg().sqmat.v3 : Vector(0.0, 1.0, 0.0);
+    }
+
+    // 2. Gather front-facing retopo polygons overlapping brush area (for self-occlusion check)
+    struct BrushPoly
+    {
+        Int32 a, b, c, d;
+        Vector sa, sb, sc, sd;
+        Float minX, maxX, minY, maxY;
+    };
+    maxon::BaseArray<BrushPoly> brushPolys;
+
+    if (visibleOnly && polyCount > 0)
+    {
+        Float brushMinX = screenX - brushRadius;
+        Float brushMaxX = screenX + brushRadius;
+        Float brushMinY = screenY - brushRadius;
+        Float brushMaxY = screenY + brushRadius;
+
+        for (Int32 p = 0; p < polyCount; ++p)
+        {
+            if (!polyFacingCam[p]) continue;
+
+            const CPolygon& poly = polys[p];
+            Vector sa = bd->WS(retopoMg * pts[poly.a]);
+            Vector sb = bd->WS(retopoMg * pts[poly.b]);
+            Vector sc = bd->WS(retopoMg * pts[poly.c]);
+            if (sa.z <= 0.0 || sb.z <= 0.0 || sc.z <= 0.0) continue;
+
+            Vector sd(0.0);
+            Float pMinX = std::min(std::min(sa.x, sb.x), sc.x);
+            Float pMaxX = std::max(std::max(sa.x, sb.x), sc.x);
+            Float pMinY = std::min(std::min(sa.y, sb.y), sc.y);
+            Float pMaxY = std::max(std::max(sa.y, sb.y), sc.y);
+
+            if (poly.c != poly.d)
+            {
+                sd = bd->WS(retopoMg * pts[poly.d]);
+                if (sd.z <= 0.0) continue;
+                pMinX = std::min(pMinX, sd.x);
+                pMaxX = std::max(pMaxX, sd.x);
+                pMinY = std::min(pMinY, sd.y);
+                pMaxY = std::max(pMaxY, sd.y);
+            }
+
+            if (pMaxX < brushMinX || pMinX > brushMaxX || pMaxY < brushMinY || pMinY > brushMaxY)
+                continue;
+
+            BrushPoly bp;
+            bp.a = poly.a;
+            bp.b = poly.b;
+            bp.c = poly.c;
+            bp.d = poly.d;
+            bp.sa = sa;
+            bp.sb = sb;
+            bp.sc = sc;
+            bp.sd = sd;
+            bp.minX = pMinX;
+            bp.maxX = pMaxX;
+            bp.minY = pMinY;
+            bp.maxY = pMaxY;
+            brushPolys.Append(bp) iferr_ignore("Append bp");
+        }
+    }
+
+    auto calcDepth2D = [](const Vector& p, const Vector& a, const Vector& b, const Vector& c) -> Float {
+        Float denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (std::abs(denom) < 1e-9)
+            return (a.z + b.z + c.z) / 3.0;
+        Float invDenom = 1.0 / denom;
+        Float u = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) * invDenom;
+        Float v = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) * invDenom;
+        Float w = 1.0 - u - v;
+        return u * a.z + v * b.z + w * c.z;
+    };
+
+    Float minDistToCenter = 1e30;
+    Vector closestVertWorld(0.0);
+
+    for (Int32 i = 0; i < ptCount; ++i)
+    {
+        Vector worldPos = retopoMg * pts[i];
+        Vector screenPos = bd->WS(worldPos);
+        if (screenPos.z <= 0.0) continue; // Behind camera
+
+        Float dx = screenPos.x - screenX;
+        Float dy = screenPos.y - screenY;
+        Float dist = std::sqrt(dx * dx + dy * dy);
+        if (dist > brushRadius) continue;
+
+        if (visibleOnly && polyCount > 0)
+        {
+            // A. Backface culling: vertex must be attached to at least one front-facing polygon
+            if (vertHasFrontPoly.GetCount() > i && !vertHasFrontPoly[i])
+                continue;
+
+            Vector rayNear = bd->SW(Vector(screenPos.x, screenPos.y, 0.0));
+            Vector rayFar  = bd->SW(Vector(screenPos.x, screenPos.y, 1000.0));
+            Vector toCam   = (rayNear - rayFar).GetNormalized();
+            if (Dot(pointNormals[i], toCam) < -0.15)
+                continue;
+
+            // B. Target mesh occlusion check
+            if (target && target->GetPolygonCount() > 0)
+            {
+                SnapResult tSnap = snapper.RaycastSurface(bd, target, screenPos.x, screenPos.y);
+                if (tSnap.valid)
+                {
+                    Float targetZ = bd->WS(tSnap.worldPos).z;
+                    Float targetTol = maxon::Max(Float(2.5), Float(targetZ * 0.01));
+                    if (screenPos.z > targetZ + targetTol)
+                        continue;
+                }
+            }
+
+            // C. Retopo mesh self-occlusion check
+            Bool occluded = false;
+            for (Int32 bpIdx = 0; bpIdx < (Int32)brushPolys.GetCount(); ++bpIdx)
+            {
+                const BrushPoly& bp = brushPolys[bpIdx];
+                if (i == bp.a || i == bp.b || i == bp.c || i == bp.d)
+                    continue;
+
+                if (screenPos.x < bp.minX || screenPos.x > bp.maxX || screenPos.y < bp.minY || screenPos.y > bp.maxY)
+                    continue;
+
+                Float polyDepth = 1e30;
+                Bool inside = false;
+                if (PointInTriangle2D(screenPos, bp.sa, bp.sb, bp.sc))
+                {
+                    polyDepth = calcDepth2D(screenPos, bp.sa, bp.sb, bp.sc);
+                    inside = true;
+                }
+                else if (bp.c != bp.d)
+                {
+                    if (PointInTriangle2D(screenPos, bp.sa, bp.sc, bp.sd))
+                    {
+                        polyDepth = calcDepth2D(screenPos, bp.sa, bp.sc, bp.sd);
+                        inside = true;
+                    }
+                }
+
+                if (inside)
+                {
+                    Float retopoTol = maxon::Max(Float(2.0), Float(polyDepth * 0.005));
+                    if (screenPos.z > polyDepth + retopoTol)
+                    {
+                        occluded = true;
+                        break;
+                    }
+                }
+            }
+            if (occluded)
+                continue;
+        }
+
+        Float t = dist / brushRadius; // 0.0 at center, 1.0 at border
+        Float u = 1.0 - t;            // 1.0 at center, 0.0 at border
+        Float falloff = 0.0;
+        switch (falloffType)
+        {
+            case 1: // Linear
+                falloff = u;
+                break;
+            case 2: // Spherical / Dome
+                falloff = std::sqrt(maxon::Max(Float(0.0), Float(1.0 - t * t)));
+                break;
+            case 3: // Sharp
+                falloff = u * u;
+                break;
+            case 0: // Smooth (Smoothstep)
+            default:
+                falloff = u * u * (3.0 - 2.0 * u);
+                break;
+        }
+
+        Float weight = falloff * intensity;
+        if (weight <= 0.0001) continue;
+
+        GrabVertexInfo gv;
+        gv.index = i;
+        gv.initLocalPos = pts[i];
+        gv.initWorldPos = worldPos;
+        gv.initNormal = pointNormals[i];
+        gv.initScreenPos = screenPos;
+        gv.weight = weight;
+        outVertices.Append(gv) iferr_ignore("Append");
+
+        if (dist < minDistToCenter)
+        {
+            minDistToCenter = dist;
+            closestVertWorld = worldPos;
+        }
+    }
+
+    if (outVertices.GetCount() == 0)
+        return false;
+
+    // Determine grab center anchor in 3D world space
+    if (target && target->GetPolygonCount() > 0)
+    {
+        SnapResult tSnap = snapper.RaycastSurface(bd, target, screenX, screenY);
+        if (tSnap.valid)
+            outGrabCenterWorld = tSnap.worldPos;
+        else
+            outGrabCenterWorld = closestVertWorld;
+    }
+    else
+    {
+        outGrabCenterWorld = closestVertWorld;
+    }
+
+    return true;
+}
+
 void MeshBuilder::NotifyMeshUpdated(PolygonObject* mesh)
 {
     if (!mesh) return;
+    mesh->SetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::CACHE);
+    mesh->Message(MSG_POINTS_CHANGED);
     mesh->Message(MSG_UPDATE);
 }
 

@@ -9,6 +9,7 @@ STRINGTABLE toolquaddraw
     QUADDRAW_TOOL_KNIFE             "Нож (Разрез петель)";
     QUADDRAW_TOOL_MULTICUT          "Мульти-разрез (Multi-Cut)";
     QUADDRAW_TOOL_DELETE            "Удаление (Delete)";
+    QUADDRAW_TOOL_GRAB              "Кисть Grab (Захват)";
     QUADDRAW_DELETE_UNCONNECTED     "Удалить все несоединенные точки";
     QUADDRAW_SNAP_ALL_TO_SURFACE    "Прилепить все точки к ближайшему мешу";
 
@@ -39,4 +40,14 @@ STRINGTABLE toolquaddraw
     QUADDRAW_RELAX_VISIBLE_ONLY     "Только видимые";
     QUADDRAW_RELAX_RADIUS           "Радиус кисти (px)";
     QUADDRAW_RELAX_STRENGTH         "Сила сглаживания";
+
+    QUADDRAW_GROUP_GRAB             "Кисть Grab (Настройки)";
+    QUADDRAW_GRAB_RADIUS            "Радиус кисти (px)";
+    QUADDRAW_GRAB_INTENSITY         "Интенсивность";
+    QUADDRAW_GRAB_FALLOFF           "Спад (Falloff)";
+    QUADDRAW_GRAB_FALLOFF_SMOOTH    "Плавный (Smooth)";
+    QUADDRAW_GRAB_FALLOFF_LINEAR    "Линейный (Linear)";
+    QUADDRAW_GRAB_FALLOFF_SPHERICAL "Сферический (Spherical)";
+    QUADDRAW_GRAB_FALLOFF_SHARP     "Острый (Sharp)";
+    QUADDRAW_GRAB_VISIBLE_ONLY      "Только видимые";
 }
